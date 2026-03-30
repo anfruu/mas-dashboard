@@ -9,6 +9,7 @@ BASE_DIR = Path(__file__).parent
 CALL_FILE = BASE_DIR / "MAS_Call_Grading_Raw_Data.xlsx"
 BENCH_FILE = BASE_DIR / "MAS_Benchmarks.xlsx"
 TRACKER_FILE = BASE_DIR / "MAS_90Day_Tracker.xlsx"
+SURVEY_FILE = BASE_DIR / "MAS_Survey.xlsx"
 
 # =========================================
 # POLISHED ENTERPRISE STYLING
@@ -48,12 +49,6 @@ STATUS_COLORS = {
     "In Progress": PRIMARY
 }
 
-PHASE_COLORS = {
-    "Phase 1": PRIMARY,
-    "Phase 2": ACCENT,
-    "Phase 3": SECONDARY
-}
-
 st.markdown(f"""
 <style>
     .stApp {{
@@ -61,7 +56,7 @@ st.markdown(f"""
     }}
 
     .block-container {{
-        padding-top: 1.0rem;
+        padding-top: 1rem;
         padding-bottom: 2rem;
         max-width: 1520px;
     }}
@@ -345,14 +340,12 @@ def load_benchmark_data() -> pd.DataFrame:
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
     avg = pick_col(df, ["BenchmarkAverageScore", "Benchmark Average Score"])
     rank = pick_col(df, ["BenchmarkRank", "Benchmark Rank"])
-    group = pick_col(df, ["BenchmarkGroup", "Benchmark Group"], required=False)
 
     out = pd.DataFrame({
         "ManagerTeam": df[team].astype(str).str.strip(),
         "AssociateName": df[assoc].astype(str).str.strip(),
         "BenchmarkAverageScore": pd.to_numeric(df[avg], errors="coerce"),
         "BenchmarkRank": pd.to_numeric(df[rank], errors="coerce"),
-        "BenchmarkGroup": df[group].astype(str).str.strip() if group else ""
     })
     return out
 
@@ -386,11 +379,36 @@ def load_tracker_data() -> pd.DataFrame:
     })
     return out
 
+@st.cache_data
+def load_survey_data() -> pd.DataFrame:
+    df = pd.read_excel(SURVEY_FILE, sheet_name="Categorical_Summary")
+    df = clean_cols(df)
+
+    q = pick_col(df, ["Question"])
+    r = pick_col(df, ["Response"])
+    c = pick_col(df, ["Count"])
+    t = pick_col(df, ["Total Responses", "TotalResponses"])
+    p = pick_col(df, ["Percent"])
+
+    out = pd.DataFrame({
+        "Question": df[q].astype(str).str.strip(),
+        "Response": df[r].astype(str).str.strip(),
+        "Count": pd.to_numeric(df[c], errors="coerce"),
+        "TotalResponses": pd.to_numeric(df[t], errors="coerce"),
+        "Percent": pd.to_numeric(df[p], errors="coerce"),
+    })
+
+    # If percentages came in as 0-1 decimals, convert to 0-100
+    if not out["Percent"].dropna().empty and out["Percent"].dropna().le(1).all():
+        out["Percent"] = out["Percent"] * 100
+
+    return out.dropna(subset=["Question", "Response"], how="all")
+
 # =========================================
 # DATA INIT
 # =========================================
 st.title("MAS Dashboard")
-st.caption("Managed Accounts Service metrics, benchmarking, and 90-day execution tracking")
+st.caption("Managed Accounts Service metrics, benchmarking, survey insights, and 90-day execution tracking")
 
 try:
     call_df = load_call_data()
@@ -410,7 +428,13 @@ except Exception as e:
     st.error(f"Could not load 90-day tracker data: {e}")
     tracker_df = pd.DataFrame()
 
-tab1, tab2, tab3 = st.tabs(["Call Grading", "Benchmarks", "90-Day Tracker"])
+try:
+    survey_df = load_survey_data()
+except Exception as e:
+    st.error(f"Could not load survey data: {e}")
+    survey_df = pd.DataFrame()
+
+tab1, tab2, tab3, tab4 = st.tabs(["Call Grading", "Benchmarks", "90-Day Tracker", "Service Survey"])
 
 # =========================================
 # TAB 1 - CALL GRADING
@@ -926,3 +950,239 @@ with tab3:
             )
         else:
             st.info("No phase summary available.")
+
+# =========================================
+# TAB 4 - SERVICE SURVEY
+# =========================================
+with tab4:
+    section_header(
+        "Service Survey",
+        "Anonymous service-level insights grouped into recognition, training, support, manual feedback, and peer coaching themes."
+    )
+
+    if survey_df.empty:
+        st.warning("No survey data loaded.")
+    else:
+        total_responses = int(survey_df["TotalResponses"].max()) if not survey_df["TotalResponses"].dropna().empty else 0
+        total_questions = int(survey_df["Question"].nunique())
+        total_themes = int(survey_df["Response"].nunique())
+
+        yes_df = survey_df[survey_df["Response"].str.strip().str.lower() == "yes"].copy()
+        dynamics_yes = yes_df[yes_df["Question"].str.contains("Dynamics", case=False, na=False)]["Percent"]
+        manual_search_yes = yes_df[yes_df["Question"].str.contains("search within the MAS manual", case=False, na=False)]["Percent"]
+        manual_ease_yes = yes_df[yes_df["Question"].str.contains("user-friendly and easy to navigate", case=False, na=False)]["Percent"]
+        peer_yes = yes_df[yes_df["Question"].str.contains("peer-to-peer coaching", case=False, na=False)]["Percent"]
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Total Responses", total_responses)
+        k2.metric("Dynamics Confidence % Yes", f"{avg_safe(dynamics_yes):.1f}%")
+        k3.metric("MAS Manual Ease % Yes", f"{avg_safe(manual_ease_yes):.1f}%")
+        k4.metric("Peer Coaching % Yes", f"{avg_safe(peer_yes):.1f}%")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        question_options = ["All Questions"] + sorted(survey_df["Question"].dropna().unique().tolist())
+        selected_question = st.selectbox("Survey Focus", question_options)
+
+        survey_filtered = survey_df.copy()
+        if selected_question != "All Questions":
+            survey_filtered = survey_filtered[survey_filtered["Question"] == selected_question]
+
+        # Recognition
+        recognition = survey_filtered[
+            survey_filtered["Question"].str.contains("recognized for achievements", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        # Training
+        training = survey_filtered[
+            survey_filtered["Question"].str.contains("Improve Training|Onboarding", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        # Knowledge
+        knowledge = survey_filtered[
+            survey_filtered["Question"].str.contains("benefit from additional knowledge", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        # Support
+        support = survey_filtered[
+            survey_filtered["Question"].str.contains("Additional Support|Resources|Tools", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        # Manual feedback
+        manual_fb = survey_filtered[
+            survey_filtered["Question"].str.contains("Feedback on MAS Manual", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        # Peer coaching
+        peer = survey_filtered[
+            survey_filtered["Question"].str.contains("peer-to-peer coaching", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        # Additional feedback
+        addl = survey_filtered[
+            survey_filtered["Question"].str.contains("Additional Feedback", case=False, na=False)
+        ].sort_values("Count", ascending=True)
+
+        top_left, top_right = st.columns(2)
+
+        with top_left:
+            if not recognition.empty:
+                fig_rec = px.bar(
+                    recognition,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Percent",
+                    color="Response",
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="Recognition Preference Breakdown"
+                )
+                fig_rec.update_traces(texttemplate="%{text:.1f}%", textposition="outside", showlegend=False)
+                fig_rec = apply_layout(fig_rec, height=340, show_legend=False)
+                fig_rec.update_yaxes(title="")
+                st.plotly_chart(fig_rec, use_container_width=True)
+
+        with top_right:
+            yesno_questions = survey_df[
+                survey_df["Response"].str.strip().str.lower().isin(["yes", "no"])
+            ].copy()
+            if selected_question != "All Questions":
+                yesno_questions = yesno_questions[yesno_questions["Question"] == selected_question]
+
+            if not yesno_questions.empty:
+                fig_yesno = px.bar(
+                    yesno_questions,
+                    x="Percent",
+                    y="Question",
+                    color="Response",
+                    orientation="h",
+                    barmode="group",
+                    text="Percent",
+                    title="Yes / No Survey Snapshot",
+                    color_discrete_map={"Yes": SECONDARY, "No": SOFT_RED}
+                )
+                fig_yesno.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+                fig_yesno = apply_layout(fig_yesno, height=340, show_legend=True)
+                fig_yesno.update_yaxes(title="")
+                fig_yesno.update_xaxes(title="Percent of Responses")
+                st.plotly_chart(fig_yesno, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        mid_left, mid_right = st.columns(2)
+
+        with mid_left:
+            if not training.empty:
+                fig_train = px.bar(
+                    training,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Count",
+                    color="Response",
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="Training & Onboarding Themes"
+                )
+                fig_train.update_traces(textposition="outside", showlegend=False)
+                fig_train = apply_layout(fig_train, height=360, show_legend=False)
+                fig_train.update_yaxes(title="")
+                st.plotly_chart(fig_train, use_container_width=True)
+
+        with mid_right:
+            if not knowledge.empty:
+                fig_know = px.bar(
+                    knowledge,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Count",
+                    color="Response",
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="Knowledge & Development Themes"
+                )
+                fig_know.update_traces(textposition="outside", showlegend=False)
+                fig_know = apply_layout(fig_know, height=360, show_legend=False)
+                fig_know.update_yaxes(title="")
+                st.plotly_chart(fig_know, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        low_left, low_right = st.columns(2)
+
+        with low_left:
+            if not support.empty:
+                fig_support = px.bar(
+                    support,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Count",
+                    color="Response",
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="Support / Resources Themes"
+                )
+                fig_support.update_traces(textposition="outside", showlegend=False)
+                fig_support = apply_layout(fig_support, height=360, show_legend=False)
+                fig_support.update_yaxes(title="")
+                st.plotly_chart(fig_support, use_container_width=True)
+
+        with low_right:
+            if not manual_fb.empty:
+                fig_manual = px.bar(
+                    manual_fb,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Count",
+                    color="Response",
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="MAS Manual Feedback Themes"
+                )
+                fig_manual.update_traces(textposition="outside", showlegend=False)
+                fig_manual = apply_layout(fig_manual, height=360, show_legend=False)
+                fig_manual.update_yaxes(title="")
+                st.plotly_chart(fig_manual, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        bottom_left, bottom_right = st.columns(2)
+
+        with bottom_left:
+            if not peer.empty:
+                fig_peer = px.bar(
+                    peer,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Percent",
+                    color="Response",
+                    color_discrete_map={"Yes": SECONDARY, "No": SOFT_RED},
+                    title="Peer Coaching Interest"
+                )
+                fig_peer.update_traces(texttemplate="%{text:.1f}%", textposition="outside", showlegend=False)
+                fig_peer = apply_layout(fig_peer, height=300, show_legend=False)
+                fig_peer.update_yaxes(title="")
+                st.plotly_chart(fig_peer, use_container_width=True)
+
+        with bottom_right:
+            if not addl.empty:
+                fig_addl = px.bar(
+                    addl,
+                    x="Count",
+                    y="Response",
+                    orientation="h",
+                    text="Count",
+                    color="Response",
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="Additional Feedback Themes"
+                )
+                fig_addl.update_traces(textposition="outside", showlegend=False)
+                fig_addl = apply_layout(fig_addl, height=300, show_legend=False)
+                fig_addl.update_yaxes(title="")
+                st.plotly_chart(fig_addl, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header("Survey Summary Table", "Grouped survey responses used to power the charts above.")
+        display_survey = survey_filtered.copy()
+        display_survey["Percent"] = display_survey["Percent"].round(1)
+        st.dataframe(display_survey, use_container_width=True, hide_index=True)
