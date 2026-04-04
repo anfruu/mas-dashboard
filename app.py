@@ -21,13 +21,12 @@ CARD_BG = "#F7FAFC"
 PAGE_BG = "#F4F8FB"
 SECTION_BG = "#FFFFFF"
 
-PRIMARY = "#2F5D8C"      # muted blue
-SECONDARY = "#4F8A8B"    # muted teal
-ACCENT = "#7A6FA6"       # muted violet
-WARM = "#C28B52"         # muted amber
-SOFT_RED = "#B86A6A"     # muted red
+PRIMARY = "#2F5D8C"
+SECONDARY = "#4F8A8B"
+ACCENT = "#7A6FA6"
+WARM = "#C28B52"
+SOFT_RED = "#B86A6A"
 SLATE = "#60758A"
-LIGHT_SLATE = "#A8B6C3"
 
 TEAM_COLORS = {
     "Katie": PRIMARY,
@@ -288,7 +287,7 @@ def month_label(dt_series: pd.Series) -> pd.Series:
 # =========================================
 @st.cache_data
 def load_call_data() -> pd.DataFrame:
-    df = pd.read_excel(CALL_FILE)
+    df = pd.read_excel(CALL_FILE, sheet_name="Raw_Data")
     df = clean_cols(df)
 
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
@@ -297,7 +296,6 @@ def load_call_data() -> pd.DataFrame:
     total = pick_col(df, ["TotalScore", "Total Score"])
     pct = pick_col(df, ["Percentage"])
     fcr = pick_col(df, ["IssueResolvedFirstContact", "Issue Resolved First Contact"])
-    tried = pick_col(df, ["TriedToResolveBeforeCalling", "Tried To Resolve Before Calling"])
     failed = pick_col(df, ["CallFailed", "Call Failed"])
 
     intro = pick_col(df, ["IntroductionAuthentication", "Introduction Authentication"])
@@ -314,7 +312,6 @@ def load_call_data() -> pd.DataFrame:
         "TotalScore": pd.to_numeric(df[total], errors="coerce"),
         "Percentage": normalize_percentage(df[pct]),
         "IssueResolvedFirstContact": normalize_yes_no(df[fcr]),
-        "TriedToResolveBeforeCalling": normalize_yes_no(df[tried]),
         "CallFailed": normalize_yes_no(df[failed]),
         "IntroductionAuthentication": pd.to_numeric(df[intro], errors="coerce"),
         "CallHandlingProfessionalism": pd.to_numeric(df[call_handling], errors="coerce"),
@@ -351,7 +348,7 @@ def load_benchmark_data() -> pd.DataFrame:
 
 @st.cache_data
 def load_tracker_data() -> pd.DataFrame:
-    df = pd.read_excel(TRACKER_FILE)
+    df = pd.read_excel(TRACKER_FILE, sheet_name="MAS 90 Day Tracker")
     df = clean_cols(df)
 
     task = pick_col(df, ["TaskName", "Task Name"])
@@ -398,7 +395,6 @@ def load_survey_data() -> pd.DataFrame:
         "Percent": pd.to_numeric(df[p], errors="coerce"),
     })
 
-    # If percentages came in as 0-1 decimals, convert to 0-100
     if not out["Percent"].dropna().empty and out["Percent"].dropna().le(1).all():
         out["Percent"] = out["Percent"] * 100
 
@@ -499,7 +495,6 @@ with tab1:
         avg_score = avg_safe(filtered["TotalScore"])
         failed_rate = pct_text((filtered["CallFailed"] == "Yes").sum(), total_calls)
         fcr_rate = pct_text((filtered["IssueResolvedFirstContact"] == "Yes").sum(), total_calls)
-        tried_rate = pct_text((filtered["TriedToResolveBeforeCalling"] == "Yes").sum(), total_calls)
 
         month_compare_df = call_df.copy()
         quarter_compare_df = call_df.copy()
@@ -519,14 +514,13 @@ with tab1:
             quarter_compare_df[quarter_compare_df["QuarterSort"] == latest_quarter]["TotalScore"]
         ) if latest_quarter else 0
 
-        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("Total Calls", total_calls)
         m2.metric("Avg Call Score", avg_score)
         m3.metric("Failed Call Rate", failed_rate)
         m4.metric("FCR Rate", fcr_rate)
-        m5.metric("Tried Before Calling", tried_rate)
-        m6.metric("Monthly Avg", monthly_avg)
-        m7.metric("Quarterly Avg", quarterly_avg)
+        m5.metric("Monthly Avg", monthly_avg)
+        m6.metric("Quarterly Avg", quarterly_avg)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -639,7 +633,7 @@ with tab1:
 
         detail_cols = [
             "AssociateName", "ManagerTeam", "DateOfCall", "TotalScore", "Percentage",
-            "CallFailed", "IssueResolvedFirstContact", "TriedToResolveBeforeCalling"
+            "CallFailed", "IssueResolvedFirstContact"
         ]
         detail_df = filtered[detail_cols].copy()
         detail_df["Percentage"] = detail_df["Percentage"].round(1)
@@ -964,64 +958,49 @@ with tab4:
         st.warning("No survey data loaded.")
     else:
         total_responses = int(survey_df["TotalResponses"].max()) if not survey_df["TotalResponses"].dropna().empty else 0
-        total_questions = int(survey_df["Question"].nunique())
-        total_themes = int(survey_df["Response"].nunique())
 
-        yes_df = survey_df[survey_df["Response"].str.strip().str.lower() == "yes"].copy()
-        dynamics_yes = yes_df[yes_df["Question"].str.contains("Dynamics", case=False, na=False)]["Percent"]
-        manual_search_yes = yes_df[yes_df["Question"].str.contains("search within the MAS manual", case=False, na=False)]["Percent"]
-        manual_ease_yes = yes_df[yes_df["Question"].str.contains("user-friendly and easy to navigate", case=False, na=False)]["Percent"]
-        peer_yes = yes_df[yes_df["Question"].str.contains("peer-to-peer coaching", case=False, na=False)]["Percent"]
+        top_left, top_right = st.columns([1, 2])
 
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Responses", total_responses)
-        k2.metric("Dynamics Confidence % Yes", f"{avg_safe(dynamics_yes):.1f}%")
-        k3.metric("MAS Manual Ease % Yes", f"{avg_safe(manual_ease_yes):.1f}%")
-        k4.metric("Peer Coaching % Yes", f"{avg_safe(peer_yes):.1f}%")
-
-        st.markdown("<br>", unsafe_allow_html=True)
+        with top_left:
+            st.metric("Total Responses", total_responses)
 
         question_options = ["All Questions"] + sorted(survey_df["Question"].dropna().unique().tolist())
-        selected_question = st.selectbox("Survey Focus", question_options)
+        with top_right:
+            selected_question = st.selectbox("Survey Focus", question_options)
 
         survey_filtered = survey_df.copy()
         if selected_question != "All Questions":
             survey_filtered = survey_filtered[survey_filtered["Question"] == selected_question]
 
-        # Recognition
         recognition = survey_filtered[
             survey_filtered["Question"].str.contains("recognized for achievements", case=False, na=False)
         ].sort_values("Count", ascending=True)
 
-        # Training
         training = survey_filtered[
             survey_filtered["Question"].str.contains("Improve Training|Onboarding", case=False, na=False)
         ].sort_values("Count", ascending=True)
 
-        # Knowledge
         knowledge = survey_filtered[
             survey_filtered["Question"].str.contains("benefit from additional knowledge", case=False, na=False)
         ].sort_values("Count", ascending=True)
 
-        # Support
         support = survey_filtered[
             survey_filtered["Question"].str.contains("Additional Support|Resources|Tools", case=False, na=False)
         ].sort_values("Count", ascending=True)
 
-        # Manual feedback
         manual_fb = survey_filtered[
             survey_filtered["Question"].str.contains("Feedback on MAS Manual", case=False, na=False)
         ].sort_values("Count", ascending=True)
 
-        # Peer coaching
         peer = survey_filtered[
             survey_filtered["Question"].str.contains("peer-to-peer coaching", case=False, na=False)
         ].sort_values("Count", ascending=True)
 
-        # Additional feedback
         addl = survey_filtered[
             survey_filtered["Question"].str.contains("Additional Feedback", case=False, na=False)
         ].sort_values("Count", ascending=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
 
         top_left, top_right = st.columns(2)
 
@@ -1032,40 +1011,35 @@ with tab4:
                     x="Count",
                     y="Response",
                     orientation="h",
-                    text="Percent",
+                    text="Count",
                     color="Response",
                     color_discrete_sequence=CATEGORY_COLORS,
                     title="Recognition Preference Breakdown"
                 )
-                fig_rec.update_traces(texttemplate="%{text:.1f}%", textposition="outside", showlegend=False)
+                fig_rec.update_traces(textposition="outside", showlegend=False)
                 fig_rec = apply_layout(fig_rec, height=340, show_legend=False)
                 fig_rec.update_yaxes(title="")
+                fig_rec.update_xaxes(title="Response Count")
                 st.plotly_chart(fig_rec, use_container_width=True)
 
         with top_right:
-            yesno_questions = survey_df[
-                survey_df["Response"].str.strip().str.lower().isin(["yes", "no"])
-            ].copy()
-            if selected_question != "All Questions":
-                yesno_questions = yesno_questions[yesno_questions["Question"] == selected_question]
-
-            if not yesno_questions.empty:
-                fig_yesno = px.bar(
-                    yesno_questions,
-                    x="Percent",
-                    y="Question",
-                    color="Response",
+            if not peer.empty:
+                fig_peer = px.bar(
+                    peer,
+                    x="Count",
+                    y="Response",
                     orientation="h",
-                    barmode="group",
-                    text="Percent",
-                    title="Yes / No Survey Snapshot",
-                    color_discrete_map={"Yes": SECONDARY, "No": SOFT_RED}
+                    text="Count",
+                    color="Response",
+                    color_discrete_map={"Yes": SECONDARY, "No": SOFT_RED},
+                    color_discrete_sequence=CATEGORY_COLORS,
+                    title="Peer Coaching Interest"
                 )
-                fig_yesno.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-                fig_yesno = apply_layout(fig_yesno, height=340, show_legend=True)
-                fig_yesno.update_yaxes(title="")
-                fig_yesno.update_xaxes(title="Percent of Responses")
-                st.plotly_chart(fig_yesno, use_container_width=True)
+                fig_peer.update_traces(textposition="outside", showlegend=False)
+                fig_peer = apply_layout(fig_peer, height=340, show_legend=False)
+                fig_peer.update_yaxes(title="")
+                fig_peer.update_xaxes(title="Response Count")
+                st.plotly_chart(fig_peer, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1086,6 +1060,7 @@ with tab4:
                 fig_train.update_traces(textposition="outside", showlegend=False)
                 fig_train = apply_layout(fig_train, height=360, show_legend=False)
                 fig_train.update_yaxes(title="")
+                fig_train.update_xaxes(title="Response Count")
                 st.plotly_chart(fig_train, use_container_width=True)
 
         with mid_right:
@@ -1103,6 +1078,7 @@ with tab4:
                 fig_know.update_traces(textposition="outside", showlegend=False)
                 fig_know = apply_layout(fig_know, height=360, show_legend=False)
                 fig_know.update_yaxes(title="")
+                fig_know.update_xaxes(title="Response Count")
                 st.plotly_chart(fig_know, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
@@ -1124,6 +1100,7 @@ with tab4:
                 fig_support.update_traces(textposition="outside", showlegend=False)
                 fig_support = apply_layout(fig_support, height=360, show_legend=False)
                 fig_support.update_yaxes(title="")
+                fig_support.update_xaxes(title="Response Count")
                 st.plotly_chart(fig_support, use_container_width=True)
 
         with low_right:
@@ -1141,45 +1118,27 @@ with tab4:
                 fig_manual.update_traces(textposition="outside", showlegend=False)
                 fig_manual = apply_layout(fig_manual, height=360, show_legend=False)
                 fig_manual.update_yaxes(title="")
+                fig_manual.update_xaxes(title="Response Count")
                 st.plotly_chart(fig_manual, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        bottom_left, bottom_right = st.columns(2)
-
-        with bottom_left:
-            if not peer.empty:
-                fig_peer = px.bar(
-                    peer,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Percent",
-                    color="Response",
-                    color_discrete_map={"Yes": SECONDARY, "No": SOFT_RED},
-                    title="Peer Coaching Interest"
-                )
-                fig_peer.update_traces(texttemplate="%{text:.1f}%", textposition="outside", showlegend=False)
-                fig_peer = apply_layout(fig_peer, height=300, show_legend=False)
-                fig_peer.update_yaxes(title="")
-                st.plotly_chart(fig_peer, use_container_width=True)
-
-        with bottom_right:
-            if not addl.empty:
-                fig_addl = px.bar(
-                    addl,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="Additional Feedback Themes"
-                )
-                fig_addl.update_traces(textposition="outside", showlegend=False)
-                fig_addl = apply_layout(fig_addl, height=300, show_legend=False)
-                fig_addl.update_yaxes(title="")
-                st.plotly_chart(fig_addl, use_container_width=True)
+        if not addl.empty:
+            fig_addl = px.bar(
+                addl,
+                x="Count",
+                y="Response",
+                orientation="h",
+                text="Count",
+                color="Response",
+                color_discrete_sequence=CATEGORY_COLORS,
+                title="Additional Feedback Themes"
+            )
+            fig_addl.update_traces(textposition="outside", showlegend=False)
+            fig_addl = apply_layout(fig_addl, height=320, show_legend=False)
+            fig_addl.update_yaxes(title="")
+            fig_addl.update_xaxes(title="Response Count")
+            st.plotly_chart(fig_addl, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         section_header("Survey Summary Table", "Grouped survey responses used to power the charts above.")
