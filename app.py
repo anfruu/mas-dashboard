@@ -8,8 +8,6 @@ st.set_page_config(page_title="MAS Dashboard", layout="wide")
 BASE_DIR = Path(__file__).parent
 CALL_FILE = BASE_DIR / "MAS_Call_Grading_Raw_Data.xlsx"
 BENCH_FILE = BASE_DIR / "MAS_Benchmarks.xlsx"
-TRACKER_FILE = BASE_DIR / "MAS_90_Day_Tracker.xlsx"
-SURVEY_FILE = BASE_DIR / "MAS_Survey.xlsx"
 
 # =========================================
 # POLISHED ENTERPRISE STYLING
@@ -42,11 +40,6 @@ CATEGORY_COLORS = [
     SLATE,
     SOFT_RED
 ]
-
-STATUS_COLORS = {
-    "Completed": SECONDARY,
-    "In Progress": PRIMARY
-}
 
 st.markdown(f"""
 <style>
@@ -160,22 +153,6 @@ st.markdown(f"""
         font-size: 0.92rem;
         margin-bottom: 0;
     }}
-
-    .phase-card {{
-        background: linear-gradient(180deg, #FFFFFF 0%, #F7FAFC 100%);
-        border: 1px solid {BORDER};
-        border-radius: 18px;
-        padding: 16px;
-        min-height: 220px;
-        box-shadow: 0 2px 8px rgba(16, 32, 51, 0.04);
-    }}
-
-    .phase-title {{
-        color: {TEXT_COLOR};
-        font-weight: 800;
-        font-size: 1.0rem;
-        margin-bottom: 0.7rem;
-    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -192,18 +169,6 @@ def section_header(title: str, subtitle: str = ""):
         """,
         unsafe_allow_html=True
     )
-
-def phase_card_start(title: str):
-    st.markdown(
-        f"""
-        <div class="phase-card">
-            <div class="phase-title">{title}</div>
-        """,
-        unsafe_allow_html=True
-    )
-
-def phase_card_end():
-    st.markdown("</div>", unsafe_allow_html=True)
 
 def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -282,6 +247,37 @@ def quarter_label(dt_series: pd.Series) -> pd.Series:
 def month_label(dt_series: pd.Series) -> pd.Series:
     return dt_series.dt.strftime("%b %Y")
 
+def add_percentile_labels(df: pd.DataFrame, score_col: str, group_col: str | None = None) -> pd.DataFrame:
+    out = df.copy()
+
+    def label_group(g):
+        g = g.sort_values(score_col, ascending=False).reset_index(drop=True)
+        n = len(g)
+        if n == 0:
+            g["PercentileGroup"] = ""
+            return g
+
+        top_n = max(1, round(n * 0.2))
+        bottom_n = max(1, round(n * 0.2))
+
+        labels = []
+        for i in range(n):
+            if i < top_n:
+                labels.append("Top 20%")
+            elif i >= n - bottom_n:
+                labels.append("Bottom 20%")
+            else:
+                labels.append("Middle 60%")
+        g["PercentileGroup"] = labels
+        return g
+
+    if group_col:
+        out = out.groupby(group_col, group_keys=False).apply(label_group).reset_index(drop=True)
+    else:
+        out = label_group(out)
+
+    return out
+
 # =========================================
 # LOAD DATA
 # =========================================
@@ -336,75 +332,27 @@ def load_benchmark_data() -> pd.DataFrame:
     team = pick_col(df, ["ManagerTeam", "Manager Team"])
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
     avg = pick_col(df, ["BenchmarkAverageScore", "Benchmark Average Score"])
-    rank = pick_col(df, ["BenchmarkRank", "Benchmark Rank"])
 
     out = pd.DataFrame({
         "ManagerTeam": df[team].astype(str).str.strip(),
         "AssociateName": df[assoc].astype(str).str.strip(),
         "BenchmarkAverageScore": pd.to_numeric(df[avg], errors="coerce"),
-        "BenchmarkRank": pd.to_numeric(df[rank], errors="coerce"),
-    })
+    }).dropna(subset=["AssociateName", "ManagerTeam", "BenchmarkAverageScore"], how="any")
+
+    out["BenchmarkRank"] = (
+        out.groupby("ManagerTeam")["BenchmarkAverageScore"]
+        .rank(method="dense", ascending=False)
+        .astype(int)
+    )
+
+    out = add_percentile_labels(out, "BenchmarkAverageScore", "ManagerTeam")
     return out
-
-@st.cache_data
-def load_tracker_data() -> pd.DataFrame:
-    df = pd.read_excel(TRACKER_FILE, sheet_name="MAS 90 Day Tracker")
-    df = clean_cols(df)
-
-    task = pick_col(df, ["TaskName", "Task Name"])
-    phase = pick_col(df, ["Phase"])
-    section = pick_col(df, ["Section"])
-    focus = pick_col(df, ["FocusArea", "Focus Area"])
-    desc = pick_col(df, ["TaskDescription", "Task Description"])
-    start = pick_col(df, ["StartDate", "Start Date"])
-    due = pick_col(df, ["DueDate", "Due Date"])
-    status = pick_col(df, ["Status"])
-    notes = pick_col(df, ["Notes"], required=False)
-    updated = pick_col(df, ["LastUpdated", "Last Updated"], required=False)
-
-    out = pd.DataFrame({
-        "TaskName": df[task].astype(str).str.strip(),
-        "Phase": df[phase].astype(str).str.strip(),
-        "Section": df[section].astype(str).str.strip(),
-        "FocusArea": df[focus].astype(str).str.strip(),
-        "TaskDescription": df[desc].astype(str).str.strip(),
-        "StartDate": pd.to_datetime(df[start], errors="coerce"),
-        "DueDate": pd.to_datetime(df[due], errors="coerce"),
-        "Status": df[status].astype(str).str.strip(),
-        "Notes": df[notes].astype(str).str.strip() if notes else "",
-        "LastUpdated": pd.to_datetime(df[updated], errors="coerce") if updated else pd.NaT,
-    })
-    return out
-
-@st.cache_data
-def load_survey_data() -> pd.DataFrame:
-    df = pd.read_excel(SURVEY_FILE, sheet_name="Categorical_Summary")
-    df = clean_cols(df)
-
-    q = pick_col(df, ["Question"])
-    r = pick_col(df, ["Response"])
-    c = pick_col(df, ["Count"])
-    t = pick_col(df, ["Total Responses", "TotalResponses"])
-    p = pick_col(df, ["Percent"])
-
-    out = pd.DataFrame({
-        "Question": df[q].astype(str).str.strip(),
-        "Response": df[r].astype(str).str.strip(),
-        "Count": pd.to_numeric(df[c], errors="coerce"),
-        "TotalResponses": pd.to_numeric(df[t], errors="coerce"),
-        "Percent": pd.to_numeric(df[p], errors="coerce"),
-    })
-
-    if not out["Percent"].dropna().empty and out["Percent"].dropna().le(1).all():
-        out["Percent"] = out["Percent"] * 100
-
-    return out.dropna(subset=["Question", "Response"], how="all")
 
 # =========================================
 # DATA INIT
 # =========================================
 st.title("MAS Dashboard")
-st.caption("Managed Accounts Service metrics, benchmarking, survey insights, and 90-day execution tracking")
+st.caption("Managed Accounts Service metrics and benchmark tracking")
 
 try:
     call_df = load_call_data()
@@ -418,19 +366,7 @@ except Exception as e:
     st.error(f"Could not load benchmark data: {e}")
     bench_df = pd.DataFrame()
 
-try:
-    tracker_df = load_tracker_data()
-except Exception as e:
-    st.error(f"Could not load 90-day tracker data: {e}")
-    tracker_df = pd.DataFrame()
-
-try:
-    survey_df = load_survey_data()
-except Exception as e:
-    st.error(f"Could not load survey data: {e}")
-    survey_df = pd.DataFrame()
-
-tab1, tab2, tab3, tab4 = st.tabs(["Call Grading", "Benchmarks", "90-Day Tracker", "Service Survey"])
+tab1, tab2 = st.tabs(["Call Grading", "Benchmarks"])
 
 # =========================================
 # TAB 1 - CALL GRADING
@@ -649,7 +585,7 @@ with tab1:
 with tab2:
     section_header(
         "Benchmark Comparison",
-        "Benchmark ranking and current performance comparisons across Katie, Charles, and MAS."
+        "Benchmark averages, auto-calculated ranks, and current performance comparisons."
     )
 
     if bench_df.empty:
@@ -666,15 +602,18 @@ with tab2:
                 .rank(method="dense", ascending=False)
                 .astype(int)
             )
+            current_assoc = add_percentile_labels(current_assoc, "CurrentAverageScore", "ManagerTeam")
 
         bench_combined = bench_df.copy().sort_values("BenchmarkAverageScore", ascending=False).reset_index(drop=True)
         bench_combined["ServiceBenchmarkRank"] = bench_combined["BenchmarkAverageScore"].rank(method="dense", ascending=False).astype(int)
+        bench_combined = add_percentile_labels(bench_combined, "BenchmarkAverageScore")
 
         if not current_assoc.empty:
             current_combined = current_assoc.copy().sort_values("CurrentAverageScore", ascending=False).reset_index(drop=True)
             current_combined["ServiceCurrentRank"] = current_combined["CurrentAverageScore"].rank(method="dense", ascending=False).astype(int)
+            current_combined = add_percentile_labels(current_combined, "CurrentAverageScore")
         else:
-            current_combined = pd.DataFrame(columns=["AssociateName", "CurrentAverageScore", "ServiceCurrentRank"])
+            current_combined = pd.DataFrame(columns=["AssociateName", "CurrentAverageScore", "ServiceCurrentRank", "PercentileGroup"])
 
         benchmark_compare = pd.DataFrame({
             "Group": ["Katie", "Charles", "MAS"],
@@ -713,24 +652,27 @@ with tab2:
         st.plotly_chart(fig_bench, use_container_width=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        section_header("Team Benchmark Snapshot", "Average benchmark and current score comparison by team and department.")
+        section_header("Team Benchmark Snapshot", "Average benchmark and current score comparison by team.")
         st.dataframe(benchmark_compare, use_container_width=True, hide_index=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
         section_header("MAS Combined Ranking", "Service-wide reranking across all associates regardless of team.")
 
         combined_merge = bench_combined.merge(
-            current_combined[["AssociateName", "CurrentAverageScore", "ServiceCurrentRank"]],
+            current_combined[["AssociateName", "CurrentAverageScore", "ServiceCurrentRank", "PercentileGroup"]],
             on="AssociateName",
-            how="left"
+            how="left",
+            suffixes=("_Benchmark", "_Current")
         )
         st.dataframe(
             combined_merge[[
                 "AssociateName",
                 "BenchmarkAverageScore",
                 "ServiceBenchmarkRank",
+                "PercentileGroup_Benchmark",
                 "CurrentAverageScore",
-                "ServiceCurrentRank"
+                "ServiceCurrentRank",
+                "PercentileGroup_Current"
             ]].sort_values("ServiceBenchmarkRank"),
             use_container_width=True,
             hide_index=True
@@ -741,407 +683,35 @@ with tab2:
         team1, team2 = st.columns(2)
 
         with team1:
-            section_header("Katie Team Rankings", "Benchmark ranking compared to current team ranking.")
+            section_header("Katie Team Rankings", "Auto-calculated benchmark rank compared to current team rank.")
             katie_merge = bench_df[bench_df["ManagerTeam"] == "Katie"].merge(
-                current_assoc[current_assoc["ManagerTeam"] == "Katie"][["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam"]],
+                current_assoc[current_assoc["ManagerTeam"] == "Katie"][["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup"]],
                 on="AssociateName",
-                how="left"
+                how="left",
+                suffixes=("_Benchmark", "_Current")
             )
             st.dataframe(
                 katie_merge[[
-                    "AssociateName", "BenchmarkAverageScore", "BenchmarkRank",
-                    "CurrentAverageScore", "CurrentRankWithinTeam"
+                    "AssociateName", "BenchmarkAverageScore", "BenchmarkRank", "PercentileGroup_Benchmark",
+                    "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup_Current"
                 ]].sort_values("BenchmarkRank"),
                 use_container_width=True,
                 hide_index=True
             )
 
         with team2:
-            section_header("Charles Team Rankings", "Benchmark ranking compared to current team ranking.")
+            section_header("Charles Team Rankings", "Auto-calculated benchmark rank compared to current team rank.")
             charles_merge = bench_df[bench_df["ManagerTeam"] == "Charles"].merge(
-                current_assoc[current_assoc["ManagerTeam"] == "Charles"][["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam"]],
+                current_assoc[current_assoc["ManagerTeam"] == "Charles"][["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup"]],
                 on="AssociateName",
-                how="left"
+                how="left",
+                suffixes=("_Benchmark", "_Current")
             )
             st.dataframe(
                 charles_merge[[
-                    "AssociateName", "BenchmarkAverageScore", "BenchmarkRank",
-                    "CurrentAverageScore", "CurrentRankWithinTeam"
+                    "AssociateName", "BenchmarkAverageScore", "BenchmarkRank", "PercentileGroup_Benchmark",
+                    "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup_Current"
                 ]].sort_values("BenchmarkRank"),
                 use_container_width=True,
                 hide_index=True
             )
-
-# =========================================
-# TAB 3 - 90 DAY TRACKER
-# =========================================
-with tab3:
-    section_header(
-        "90-Day Tracker",
-        "Execution progress across all phases with streamlined status tracking."
-    )
-
-    if tracker_df.empty:
-        st.warning("No tracker data loaded.")
-    else:
-        phase_filter = st.selectbox("Phase", ["All Phases", "Phase 1", "Phase 2", "Phase 3"])
-
-        tfiltered = tracker_df.copy()
-        if phase_filter != "All Phases":
-            tfiltered = tfiltered[tfiltered["Phase"] == phase_filter]
-
-        tfiltered = tfiltered[tfiltered["Status"].isin(["In Progress", "Completed"])]
-
-        total_tasks = len(tfiltered)
-        completed = int((tfiltered["Status"] == "Completed").sum())
-        in_progress = int((tfiltered["Status"] == "In Progress").sum())
-        completion_rate = pct_text(completed, total_tasks)
-
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Tasks", total_tasks)
-        m2.metric("Completed", completed)
-        m3.metric("In Progress", in_progress)
-        m4.metric("Completion Rate", completion_rate)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        phase_summary = (
-            tfiltered.groupby("Phase", as_index=False)
-            .agg(
-                TotalTasks=("TaskName", "count"),
-                Completed=("Status", lambda s: (s == "Completed").sum()),
-                InProgress=("Status", lambda s: (s == "In Progress").sum())
-            )
-        )
-
-        if not phase_summary.empty:
-            phase_summary["CompletionRate"] = (
-                (phase_summary["Completed"] / phase_summary["TotalTasks"]) * 100
-            ).round(1).fillna(0)
-
-        if phase_filter == "All Phases":
-            p1, p2, p3 = st.columns(3)
-            phase_lookup = {
-                "Phase 1": {"TotalTasks": 0, "Completed": 0, "InProgress": 0, "CompletionRate": 0},
-                "Phase 2": {"TotalTasks": 0, "Completed": 0, "InProgress": 0, "CompletionRate": 0},
-                "Phase 3": {"TotalTasks": 0, "Completed": 0, "InProgress": 0, "CompletionRate": 0},
-            }
-
-            for _, row in phase_summary.iterrows():
-                phase_lookup[row["Phase"]] = {
-                    "TotalTasks": int(row["TotalTasks"]),
-                    "Completed": int(row["Completed"]),
-                    "InProgress": int(row["InProgress"]),
-                    "CompletionRate": row["CompletionRate"]
-                }
-
-            for col, phase_name in zip([p1, p2, p3], ["Phase 1", "Phase 2", "Phase 3"]):
-                with col:
-                    phase_card_start(phase_name)
-                    st.metric("Total Tasks", phase_lookup[phase_name]["TotalTasks"])
-                    st.metric("Completed", phase_lookup[phase_name]["Completed"])
-                    st.metric("In Progress", phase_lookup[phase_name]["InProgress"])
-                    st.metric("Completion %", f'{phase_lookup[phase_name]["CompletionRate"]:.1f}%')
-                    phase_card_end()
-        else:
-            if not phase_summary.empty:
-                row = phase_summary.iloc[0]
-                phase_card_start(phase_filter)
-                a, b, c, d = st.columns(4)
-                a.metric("Total Tasks", int(row["TotalTasks"]))
-                b.metric("Completed", int(row["Completed"]))
-                c.metric("In Progress", int(row["InProgress"]))
-                d.metric("Completion %", f'{row["CompletionRate"]:.1f}%')
-                phase_card_end()
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        left, right = st.columns(2)
-
-        with left:
-            phase_melt = phase_summary.melt(
-                id_vars="Phase",
-                value_vars=["Completed", "InProgress"],
-                var_name="StatusGroup",
-                value_name="Count"
-            ) if not phase_summary.empty else pd.DataFrame()
-
-            if not phase_melt.empty:
-                fig_phase = px.bar(
-                    phase_melt,
-                    x="Phase",
-                    y="Count",
-                    color="StatusGroup",
-                    barmode="group",
-                    title="Status by Phase",
-                    color_discrete_map={
-                        "Completed": STATUS_COLORS["Completed"],
-                        "InProgress": STATUS_COLORS["In Progress"]
-                    },
-                    text_auto=True
-                )
-                fig_phase = apply_layout(fig_phase, height=330)
-                st.plotly_chart(fig_phase, use_container_width=True)
-
-        with right:
-            status_counts = (
-                tfiltered.groupby("Status", as_index=False)
-                .agg(Count=("TaskName", "count"))
-            )
-
-            if not status_counts.empty:
-                fig_status = px.pie(
-                    status_counts,
-                    values="Count",
-                    names="Status",
-                    title="Overall Status Breakdown",
-                    color="Status",
-                    color_discrete_map=STATUS_COLORS,
-                    hole=0.58
-                )
-                fig_status = apply_layout(fig_status, height=330)
-                st.plotly_chart(fig_status, use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        focus_status = (
-            tfiltered.groupby(["FocusArea", "Status"], as_index=False)
-            .agg(TaskCount=("TaskName", "count"))
-        )
-
-        if not focus_status.empty:
-            focus_totals = (
-                focus_status.groupby("FocusArea", as_index=False)["TaskCount"]
-                .sum()
-                .sort_values("TaskCount", ascending=False)
-            )
-            focus_order = focus_totals["FocusArea"].tolist()
-
-            fig_focus = px.bar(
-                focus_status,
-                x="TaskCount",
-                y="FocusArea",
-                color="Status",
-                orientation="h",
-                barmode="stack",
-                category_orders={"FocusArea": focus_order[::-1]},
-                title="Progress by Focus Area",
-                color_discrete_map=STATUS_COLORS,
-                text_auto=True
-            )
-            fig_focus = apply_layout(fig_focus, height=420, show_legend=True)
-            fig_focus.update_yaxes(title="")
-            fig_focus.update_xaxes(title="Task Count", gridcolor="#E6EDF3")
-            st.plotly_chart(fig_focus, use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        section_header("Phase Summary", "Condensed summary table for phase-level progress.")
-        if not phase_summary.empty:
-            st.dataframe(
-                phase_summary[["Phase", "TotalTasks", "Completed", "InProgress", "CompletionRate"]],
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.info("No phase summary available.")
-
-# =========================================
-# TAB 4 - SERVICE SURVEY
-# =========================================
-with tab4:
-    section_header(
-        "Service Survey",
-        "Anonymous service-level insights grouped into recognition, training, support, manual feedback, and peer coaching themes."
-    )
-
-    if survey_df.empty:
-        st.warning("No survey data loaded.")
-    else:
-        total_responses = int(survey_df["TotalResponses"].max()) if not survey_df["TotalResponses"].dropna().empty else 0
-
-        top_left, top_right = st.columns([1, 2])
-
-        with top_left:
-            st.metric("Total Responses", total_responses)
-
-        question_options = ["All Questions"] + sorted(survey_df["Question"].dropna().unique().tolist())
-        with top_right:
-            selected_question = st.selectbox("Survey Focus", question_options)
-
-        survey_filtered = survey_df.copy()
-        if selected_question != "All Questions":
-            survey_filtered = survey_filtered[survey_filtered["Question"] == selected_question]
-
-        recognition = survey_filtered[
-            survey_filtered["Question"].str.contains("recognized for achievements", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        training = survey_filtered[
-            survey_filtered["Question"].str.contains("Improve Training|Onboarding", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        knowledge = survey_filtered[
-            survey_filtered["Question"].str.contains("benefit from additional knowledge", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        support = survey_filtered[
-            survey_filtered["Question"].str.contains("Additional Support|Resources|Tools", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        manual_fb = survey_filtered[
-            survey_filtered["Question"].str.contains("Feedback on MAS Manual", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        peer = survey_filtered[
-            survey_filtered["Question"].str.contains("peer-to-peer coaching", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        addl = survey_filtered[
-            survey_filtered["Question"].str.contains("Additional Feedback", case=False, na=False)
-        ].sort_values("Count", ascending=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        top_left, top_right = st.columns(2)
-
-        with top_left:
-            if not recognition.empty:
-                fig_rec = px.bar(
-                    recognition,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="Recognition Preference Breakdown"
-                )
-                fig_rec.update_traces(textposition="outside", showlegend=False)
-                fig_rec = apply_layout(fig_rec, height=340, show_legend=False)
-                fig_rec.update_yaxes(title="")
-                fig_rec.update_xaxes(title="Response Count")
-                st.plotly_chart(fig_rec, use_container_width=True)
-
-        with top_right:
-            if not peer.empty:
-                fig_peer = px.bar(
-                    peer,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_map={"Yes": SECONDARY, "No": SOFT_RED},
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="Peer Coaching Interest"
-                )
-                fig_peer.update_traces(textposition="outside", showlegend=False)
-                fig_peer = apply_layout(fig_peer, height=340, show_legend=False)
-                fig_peer.update_yaxes(title="")
-                fig_peer.update_xaxes(title="Response Count")
-                st.plotly_chart(fig_peer, use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        mid_left, mid_right = st.columns(2)
-
-        with mid_left:
-            if not training.empty:
-                fig_train = px.bar(
-                    training,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="Training & Onboarding Themes"
-                )
-                fig_train.update_traces(textposition="outside", showlegend=False)
-                fig_train = apply_layout(fig_train, height=360, show_legend=False)
-                fig_train.update_yaxes(title="")
-                fig_train.update_xaxes(title="Response Count")
-                st.plotly_chart(fig_train, use_container_width=True)
-
-        with mid_right:
-            if not knowledge.empty:
-                fig_know = px.bar(
-                    knowledge,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="Knowledge & Development Themes"
-                )
-                fig_know.update_traces(textposition="outside", showlegend=False)
-                fig_know = apply_layout(fig_know, height=360, show_legend=False)
-                fig_know.update_yaxes(title="")
-                fig_know.update_xaxes(title="Response Count")
-                st.plotly_chart(fig_know, use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        low_left, low_right = st.columns(2)
-
-        with low_left:
-            if not support.empty:
-                fig_support = px.bar(
-                    support,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="Support / Resources Themes"
-                )
-                fig_support.update_traces(textposition="outside", showlegend=False)
-                fig_support = apply_layout(fig_support, height=360, show_legend=False)
-                fig_support.update_yaxes(title="")
-                fig_support.update_xaxes(title="Response Count")
-                st.plotly_chart(fig_support, use_container_width=True)
-
-        with low_right:
-            if not manual_fb.empty:
-                fig_manual = px.bar(
-                    manual_fb,
-                    x="Count",
-                    y="Response",
-                    orientation="h",
-                    text="Count",
-                    color="Response",
-                    color_discrete_sequence=CATEGORY_COLORS,
-                    title="MAS Manual Feedback Themes"
-                )
-                fig_manual.update_traces(textposition="outside", showlegend=False)
-                fig_manual = apply_layout(fig_manual, height=360, show_legend=False)
-                fig_manual.update_yaxes(title="")
-                fig_manual.update_xaxes(title="Response Count")
-                st.plotly_chart(fig_manual, use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        if not addl.empty:
-            fig_addl = px.bar(
-                addl,
-                x="Count",
-                y="Response",
-                orientation="h",
-                text="Count",
-                color="Response",
-                color_discrete_sequence=CATEGORY_COLORS,
-                title="Additional Feedback Themes"
-            )
-            fig_addl.update_traces(textposition="outside", showlegend=False)
-            fig_addl = apply_layout(fig_addl, height=320, show_legend=False)
-            fig_addl.update_yaxes(title="")
-            fig_addl.update_xaxes(title="Response Count")
-            st.plotly_chart(fig_addl, use_container_width=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        section_header("Survey Summary Table", "Grouped survey responses used to power the charts above.")
-        display_survey = survey_filtered.copy()
-        display_survey["Percent"] = display_survey["Percent"].round(1)
-        st.dataframe(display_survey, use_container_width=True, hide_index=True)
