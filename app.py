@@ -172,7 +172,7 @@ def section_header(title: str, subtitle: str = ""):
 
 def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [str(c).strip().replace("\n", " ").replace("\r", "") for c in df.columns]
+    df.columns = [str(c).strip().replace("\n", " ").replace("\r", "").replace("\xa0", " ") for c in df.columns]
     return df
 
 def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
@@ -327,32 +327,27 @@ def load_call_data() -> pd.DataFrame:
 
 @st.cache_data
 def load_benchmark_data() -> pd.DataFrame:
-    # Read exactly the sheet you showed
     df = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data", header=0)
-    df = clean_cols(df)
     df = df.dropna(how="all")
 
-    # Extra cleanup in case Excel table formatting leaves hidden spaces
-    df.columns = [str(c).strip().replace("\xa0", " ") for c in df.columns]
+    # Force first 3 columns only from the new benchmark file
+    df = df.iloc[:, 0:3].copy()
+    df.columns = ["ManagerTeam", "AssociateName", "BenchmarkAverageScore"]
 
-    team = pick_col(df, ["ManagerTeam", "Manager Team"])
-    assoc = pick_col(df, ["AssociateName", "Associate Name"])
-    avg = pick_col(df, ["BenchmarkAverageScore", "Benchmark Average Score"])
+    df["ManagerTeam"] = df["ManagerTeam"].astype(str).str.strip()
+    df["AssociateName"] = df["AssociateName"].astype(str).str.strip()
+    df["BenchmarkAverageScore"] = pd.to_numeric(df["BenchmarkAverageScore"], errors="coerce")
 
-    out = pd.DataFrame({
-        "ManagerTeam": df[team].astype(str).str.strip(),
-        "AssociateName": df[assoc].astype(str).str.strip(),
-        "BenchmarkAverageScore": pd.to_numeric(df[avg], errors="coerce"),
-    }).dropna(subset=["AssociateName", "ManagerTeam", "BenchmarkAverageScore"], how="any")
+    df = df.dropna(subset=["ManagerTeam", "AssociateName", "BenchmarkAverageScore"])
 
-    out["BenchmarkRank"] = (
-        out.groupby("ManagerTeam")["BenchmarkAverageScore"]
+    df["BenchmarkRank"] = (
+        df.groupby("ManagerTeam")["BenchmarkAverageScore"]
         .rank(method="dense", ascending=False)
         .astype(int)
     )
 
-    out = add_percentile_labels(out, "BenchmarkAverageScore", "ManagerTeam")
-    return out
+    df = add_percentile_labels(df, "BenchmarkAverageScore", "ManagerTeam")
+    return df
 
 # =========================================
 # DATA INIT
