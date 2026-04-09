@@ -172,7 +172,7 @@ def section_header(title: str, subtitle: str = ""):
 
 def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [str(c).strip().replace("\n", " ").replace("\r", "") for c in df.columns]
     return df
 
 def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
@@ -181,7 +181,7 @@ def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
         if opt.lower() in lookup:
             return lookup[opt.lower()]
     if required:
-        raise KeyError(f"Missing one of columns: {options}")
+        raise KeyError(f"Missing one of columns: {options}. Found columns: {list(df.columns)}")
     return None
 
 def normalize_yes_no(series: pd.Series) -> pd.Series:
@@ -285,6 +285,7 @@ def add_percentile_labels(df: pd.DataFrame, score_col: str, group_col: str | Non
 def load_call_data() -> pd.DataFrame:
     df = pd.read_excel(CALL_FILE, sheet_name="Raw_Data")
     df = clean_cols(df)
+    df = df.dropna(how="all")
 
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
     team = pick_col(df, ["ManagerTeam", "Manager Team"])
@@ -326,8 +327,13 @@ def load_call_data() -> pd.DataFrame:
 
 @st.cache_data
 def load_benchmark_data() -> pd.DataFrame:
-    df = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data")
+    # Read exactly the sheet you showed
+    df = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data", header=0)
     df = clean_cols(df)
+    df = df.dropna(how="all")
+
+    # Extra cleanup in case Excel table formatting leaves hidden spaces
+    df.columns = [str(c).strip().replace("\xa0", " ") for c in df.columns]
 
     team = pick_col(df, ["ManagerTeam", "Manager Team"])
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
@@ -605,26 +611,32 @@ with tab2:
             current_assoc = add_percentile_labels(current_assoc, "CurrentAverageScore", "ManagerTeam")
 
         bench_combined = bench_df.copy().sort_values("BenchmarkAverageScore", ascending=False).reset_index(drop=True)
-        bench_combined["ServiceBenchmarkRank"] = bench_combined["BenchmarkAverageScore"].rank(method="dense", ascending=False).astype(int)
+        bench_combined["ServiceBenchmarkRank"] = (
+            bench_combined["BenchmarkAverageScore"].rank(method="dense", ascending=False).astype(int)
+        )
         bench_combined = add_percentile_labels(bench_combined, "BenchmarkAverageScore")
 
         if not current_assoc.empty:
             current_combined = current_assoc.copy().sort_values("CurrentAverageScore", ascending=False).reset_index(drop=True)
-            current_combined["ServiceCurrentRank"] = current_combined["CurrentAverageScore"].rank(method="dense", ascending=False).astype(int)
+            current_combined["ServiceCurrentRank"] = (
+                current_combined["CurrentAverageScore"].rank(method="dense", ascending=False).astype(int)
+            )
             current_combined = add_percentile_labels(current_combined, "CurrentAverageScore")
         else:
-            current_combined = pd.DataFrame(columns=["AssociateName", "CurrentAverageScore", "ServiceCurrentRank", "PercentileGroup"])
+            current_combined = pd.DataFrame(
+                columns=["AssociateName", "CurrentAverageScore", "ServiceCurrentRank", "PercentileGroup"]
+            )
 
         benchmark_compare = pd.DataFrame({
             "Group": ["Katie", "Charles", "MAS"],
             "BenchmarkAverage": [
-                avg_safe(bench_df[bench_df["ManagerTeam"] == "Katie"]["BenchmarkAverageScore"]),
-                avg_safe(bench_df[bench_df["ManagerTeam"] == "Charles"]["BenchmarkAverageScore"]),
+                avg_safe(bench_df.loc[bench_df["ManagerTeam"] == "Katie", "BenchmarkAverageScore"]),
+                avg_safe(bench_df.loc[bench_df["ManagerTeam"] == "Charles", "BenchmarkAverageScore"]),
                 avg_safe(bench_df["BenchmarkAverageScore"])
             ],
             "CurrentAverage": [
-                avg_safe(current_assoc[current_assoc["ManagerTeam"] == "Katie"]["CurrentAverageScore"]) if not current_assoc.empty else 0,
-                avg_safe(current_assoc[current_assoc["ManagerTeam"] == "Charles"]["CurrentAverageScore"]) if not current_assoc.empty else 0,
+                avg_safe(current_assoc.loc[current_assoc["ManagerTeam"] == "Katie", "CurrentAverageScore"]) if not current_assoc.empty else 0,
+                avg_safe(current_assoc.loc[current_assoc["ManagerTeam"] == "Charles", "CurrentAverageScore"]) if not current_assoc.empty else 0,
                 avg_safe(current_assoc["CurrentAverageScore"]) if not current_assoc.empty else 0
             ]
         })
@@ -685,7 +697,7 @@ with tab2:
         with team1:
             section_header("Katie Team Rankings", "Auto-calculated benchmark rank compared to current team rank.")
             katie_merge = bench_df[bench_df["ManagerTeam"] == "Katie"].merge(
-                current_assoc[current_assoc["ManagerTeam"] == "Katie"][["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup"]],
+                current_assoc.loc[current_assoc["ManagerTeam"] == "Katie", ["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup"]],
                 on="AssociateName",
                 how="left",
                 suffixes=("_Benchmark", "_Current")
@@ -702,7 +714,7 @@ with tab2:
         with team2:
             section_header("Charles Team Rankings", "Auto-calculated benchmark rank compared to current team rank.")
             charles_merge = bench_df[bench_df["ManagerTeam"] == "Charles"].merge(
-                current_assoc[current_assoc["ManagerTeam"] == "Charles"][["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup"]],
+                current_assoc.loc[current_assoc["ManagerTeam"] == "Charles", ["AssociateName", "CurrentAverageScore", "CurrentRankWithinTeam", "PercentileGroup"]],
                 on="AssociateName",
                 how="left",
                 suffixes=("_Benchmark", "_Current")
