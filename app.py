@@ -560,8 +560,13 @@ with tab2:
     )
 
     try:
-        bench_df = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data", header=0)
-        bench_df = bench_df.dropna(how="all")
+        st.write("BENCH TAB LOADED")
+
+        raw_bench = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data", header=0)
+        st.write("RAW BENCH COLUMNS:", list(raw_bench.columns))
+        st.write(raw_bench.head())
+
+        bench_df = raw_bench.dropna(how="all")
         bench_df = bench_df.iloc[:, 0:3].copy()
         bench_df.columns = ["ManagerTeam", "AssociateName", "BenchmarkAverageScore"]
 
