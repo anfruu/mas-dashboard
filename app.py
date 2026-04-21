@@ -517,20 +517,21 @@ with tab1:
                 filtered.groupby("AssociateName", as_index=False)
                 .agg(AverageScore=("TotalScore", "mean"))
                 .sort_values("AverageScore", ascending=False)
+                .reset_index(drop=True)
             )
+            assoc_avg.insert(0, "Rank", range(1, len(assoc_avg) + 1))
 
-            c1, c2 = st.columns(2)
-            with c1:
-                section_header("Top Percentile", "Highest average scoring associates in current view.")
-                st.dataframe(assoc_avg.head(5), use_container_width=True, hide_index=True)
+            if view_by == "All Teams":
+                ranking_df = assoc_avg.head(10).copy()
+            else:
+                ranking_df = assoc_avg.copy()
 
-            with c2:
-                section_header("Bottom Percentile", "Lowest average scoring associates in current view.")
-                st.dataframe(
-                    assoc_avg.tail(5).sort_values("AverageScore", ascending=True),
-                    use_container_width=True,
-                    hide_index=True
-                )
+            section_header("Associate Rankings", "Highest to lowest average score in current view.")
+            st.dataframe(
+                ranking_df,
+                use_container_width=True,
+                hide_index=True
+            )
 
             st.markdown("<br>", unsafe_allow_html=True)
 
