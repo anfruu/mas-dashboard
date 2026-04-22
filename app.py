@@ -470,22 +470,58 @@ with tab1:
         st.markdown("<br>", unsafe_allow_html=True)
 
         if view_by == "All Teams":
-            team_summary = (
-                filtered.groupby("ManagerTeam", as_index=False)
-                .agg(AverageScore=("TotalScore", "mean"))
-            )
+            trend_df = filtered.copy()
+            if not trend_df.empty:
+                trend_df["TrendMonth"] = trend_df["DateOfCall"].dt.strftime("%b %Y")
+                trend_plot = (
+                    trend_df.groupby(["TrendMonth", "MonthSort"], as_index=False)
+                    .agg(TotalScore=("TotalScore", "mean"))
+                    .sort_values("MonthSort")
+                )
 
-            fig_team = px.bar(
-                team_summary,
-                x="ManagerTeam",
-                y="AverageScore",
-                color="ManagerTeam",
-                color_discrete_map={"Katie": TEAM_COLORS["Katie"], "Charles": TEAM_COLORS["Charles"]},
-                text_auto=".1f",
-                title="Average Score by Team"
-            )
-            fig_team = apply_layout(fig_team, height=285)
-            st.plotly_chart(fig_team, use_container_width=True)
+                fig_trend = px.line(
+                    trend_plot,
+                    x="TrendMonth",
+                    y="TotalScore",
+                    markers=True,
+                    title="Average Score Trend by Month"
+                )
+                fig_trend.update_traces(line=dict(width=3, color=PRIMARY), marker=dict(size=9, color=PRIMARY))
+                fig_trend = apply_layout(fig_trend, height=315, show_legend=False)
+                fig_trend.update_xaxes(title="")
+                fig_trend.update_yaxes(title="Avg Total Score")
+                st.plotly_chart(fig_trend, use_container_width=True)
+
+        elif view_by in ["Katie", "Charles"]:
+            trend_df = filtered.copy()
+            if not trend_df.empty:
+                trend_df["TrendMonth"] = trend_df["DateOfCall"].dt.strftime("%b %Y")
+                trend_plot = (
+                    trend_df.groupby(["TrendMonth", "MonthSort"], as_index=False)
+                    .agg(
+                        TotalScore=("TotalScore", "mean"),
+                        CallCount=("TotalScore", "size")
+                    )
+                    .sort_values("MonthSort")
+                )
+
+                trend_plot["BarLabel"] = trend_plot.apply(
+                    lambda r: f"{r['TotalScore']:.1f}<br>{int(r['CallCount'])} calls",
+                    axis=1
+                )
+
+                fig_trend = px.bar(
+                    trend_plot,
+                    x="TrendMonth",
+                    y="TotalScore",
+                    text="BarLabel",
+                    title="Average Score Trend by Month"
+                )
+                fig_trend.update_traces(marker_color=PRIMARY, textposition="outside")
+                fig_trend = apply_layout(fig_trend, height=315, show_legend=False)
+                fig_trend.update_xaxes(title="")
+                fig_trend.update_yaxes(title="Avg Total Score")
+                st.plotly_chart(fig_trend, use_container_width=True)
 
         else:
             trend_df = filtered.copy()
@@ -643,8 +679,8 @@ with tab2:
         })
 
         k1, k2 = st.columns(2)
-        k1.metric("Benchmark Avg (MAS)", avg_safe(bench_df["BenchmarkAverageScore"]))
-        k2.metric("Current Avg (MAS)", avg_safe(current_assoc["CurrentAverageScore"]) if not current_assoc.empty else 0)
+        k1.metric("Q1 Benchmark Avg (MAS)", avg_safe(bench_df["BenchmarkAverageScore"]))
+        k2.metric("March to Current Avg (MAS)", avg_safe(current_assoc["CurrentAverageScore"]) if not current_assoc.empty else 0)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -654,7 +690,7 @@ with tab2:
             y="Score",
             color="Metric",
             barmode="group",
-            title="Benchmark vs Current Average Score",
+            title="Q1 Benchmark vs March to Current Average Score",
             color_discrete_map={
                 "BenchmarkAverage": ACCENT,
                 "CurrentAverage": PRIMARY
