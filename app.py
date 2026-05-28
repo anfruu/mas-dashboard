@@ -66,30 +66,6 @@ st.markdown(f"""
         color: {SUBTEXT_COLOR} !important;
     }}
 
-    .stTabs [data-baseweb="tab-list"] {{
-        gap: 12px;
-        border-bottom: none;
-        padding-bottom: 8px;
-    }}
-
-    .stTabs [data-baseweb="tab"] {{
-        height: 44px;
-        background-color: #FFFFFF;
-        border: 1px solid {BORDER};
-        border-radius: 12px;
-        padding-left: 18px;
-        padding-right: 18px;
-        color: {TEXT_COLOR} !important;
-        font-weight: 700;
-        box-shadow: 0 1px 2px rgba(16, 32, 51, 0.04);
-    }}
-
-    .stTabs [aria-selected="true"] {{
-        background: linear-gradient(180deg, #F7FBFF 0%, #EEF5FB 100%) !important;
-        border-color: #C9D8E6 !important;
-        color: {PRIMARY} !important;
-    }}
-
     div[data-testid="stMetric"] {{
         background: linear-gradient(180deg, #FFFFFF 0%, {CARD_BG} 100%);
         border: 1px solid {BORDER};
@@ -259,17 +235,34 @@ MONTH_NUM = {
     "October": 10, "November": 11, "December": 12
 }
 
-def quarter_sort_key(q: str) -> int:
-    q = str(q).strip().upper().replace(" ", "")
-    if q == "Q1":
-        return 1
-    if q == "Q2":
-        return 2
-    if q == "Q3":
-        return 3
-    if q == "Q4":
-        return 4
-    return 99
+MONTH_FIXES = {
+    "janruary": "January",
+    "janaury": "January",
+    "january": "January",
+    "janurary": "January",
+    "januarry": "January",
+    "febuary": "February",
+    "februrary": "February",
+    "marhc": "March",
+    "aplir": "April",
+    "agust": "August",
+    "september": "September",
+    "ocotber": "October",
+    "novemeber": "November",
+    "decemeber": "December",
+}
+
+def normalize_benchmark_month(value: str) -> str:
+    s = str(value).strip()
+    if not s:
+        return s
+    s_lower = s.lower()
+    if s_lower in MONTH_FIXES:
+        return MONTH_FIXES[s_lower]
+    s_title = s.title()
+    if s_title in MONTH_NUM:
+        return s_title
+    return s_title
 
 # =========================================
 # LOAD CURRENT CALL DATA
@@ -339,7 +332,7 @@ def load_benchmark_data() -> pd.DataFrame:
     out = pd.DataFrame({
         "AssociateName": df[assoc].astype(str).str.strip(),
         "ManagerTeam": df[team].astype(str).str.strip(),
-        "BenchmarkMonth": df[month].astype(str).str.strip().str.title(),
+        "BenchmarkMonth": df[month].astype(str).apply(normalize_benchmark_month),
         "BenchmarkQuarter": df[quarter].astype(str).str.strip(),
         "Score": pd.to_numeric(df[score], errors="coerce"),
     })
@@ -352,8 +345,8 @@ def load_benchmark_data() -> pd.DataFrame:
     })
 
     out["BenchmarkMonthNum"] = out["BenchmarkMonth"].map(MONTH_NUM)
-    out["BenchmarkMonthLabel"] = out["BenchmarkMonth"]
-    out["BenchmarkPeriodSort"] = out["BenchmarkMonthNum"]
+    out = out.dropna(subset=["BenchmarkMonthNum"]).copy()
+    out["BenchmarkMonthNum"] = out["BenchmarkMonthNum"].astype(int)
     out["BenchmarkPercentage"] = out["Score"]
     return out
 
@@ -438,7 +431,6 @@ elif view_by == "Individual Associate" and selected_associate:
     call_filtered = call_filtered[call_filtered["AssociateName"] == selected_associate]
     bench_filtered = bench_filtered[bench_filtered["AssociateName"] == selected_associate]
 
-# full selected datasets for rankings/trends
 call_selected_full = call_df.copy()
 bench_selected_full = bench_df.copy()
 
@@ -496,14 +488,14 @@ section_header(
 bench_monthly = pd.DataFrame()
 if not bench_selected_full.empty:
     bench_monthly = (
-        bench_selected_full.groupby(["BenchmarkMonthLabel", "BenchmarkMonthNum"], as_index=False)
+        bench_selected_full.groupby(["BenchmarkMonth", "BenchmarkMonthNum"], as_index=False)
         .agg(
             AvgScore=("Score", "mean"),
             CallCount=("Score", "size")
         )
         .sort_values("BenchmarkMonthNum")
     )
-    bench_monthly["PeriodLabel"] = bench_monthly["BenchmarkMonthLabel"]
+    bench_monthly["PeriodLabel"] = bench_monthly["BenchmarkMonth"]
     bench_monthly["PeriodSort"] = bench_monthly["BenchmarkMonthNum"]
     bench_monthly["Source"] = "Q1 Benchmark"
 
@@ -522,47 +514,34 @@ if not call_selected_full.empty:
     current_monthly["Source"] = "Current"
 
 monthly_compare = pd.concat(
-    [bench_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not bench_monthly.empty else pd.DataFrame(),
-     current_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not current_monthly.empty else pd.DataFrame()],
+    [
+        bench_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not bench_monthly.empty else pd.DataFrame(),
+        current_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not current_monthly.empty else pd.DataFrame()
+    ],
     ignore_index=True
 )
 
 if not monthly_compare.empty:
     monthly_compare = monthly_compare.sort_values("PeriodSort").reset_index(drop=True)
+    monthly_compare["BarLabel"] = monthly_compare.apply(
+        lambda r: f"{r['AvgScore']:.1f}<br>{int(r['CallCount'])} calls",
+        axis=1
+    )
 
-    if view_by in ["Katie", "Charles"]:
-        monthly_compare["BarLabel"] = monthly_compare.apply(
-            lambda r: f"{r['AvgScore']:.1f}<br>{int(r['CallCount'])} calls",
-            axis=1
-        )
-        fig_month = px.bar(
-            monthly_compare,
-            x="PeriodLabel",
-            y="AvgScore",
-            color="Source",
-            text="BarLabel",
-            barmode="group",
-            title="Average Score by Month"
-        )
-        fig_month.update_traces(textposition="outside")
-        fig_month = apply_layout(fig_month, height=360, show_legend=True)
-        fig_month.update_xaxes(title="")
-        fig_month.update_yaxes(title="Avg Score")
-        st.plotly_chart(fig_month, use_container_width=True)
-    else:
-        fig_month = px.line(
-            monthly_compare,
-            x="PeriodLabel",
-            y="AvgScore",
-            color="Source",
-            markers=True,
-            title="Average Score by Month"
-        )
-        fig_month.update_traces(line=dict(width=3), marker=dict(size=9))
-        fig_month = apply_layout(fig_month, height=360, show_legend=True)
-        fig_month.update_xaxes(title="")
-        fig_month.update_yaxes(title="Avg Score")
-        st.plotly_chart(fig_month, use_container_width=True)
+    fig_month = px.bar(
+        monthly_compare,
+        x="PeriodLabel",
+        y="AvgScore",
+        color="Source",
+        text="BarLabel",
+        barmode="group",
+        title="Average Score by Month"
+    )
+    fig_month.update_traces(textposition="outside")
+    fig_month = apply_layout(fig_month, height=360, show_legend=True)
+    fig_month.update_xaxes(title="")
+    fig_month.update_yaxes(title="Avg Score")
+    st.plotly_chart(fig_month, use_container_width=True)
 else:
     st.info("No monthly comparison data available for the selected view.")
 
@@ -626,7 +605,7 @@ else:
 # =========================================
 section_header(
     "Ranking Comparison",
-    "Q1 benchmark rank versus current rank for the selected view."
+    "Q1 benchmark rank is shown first, with the current rank displayed alongside it."
 )
 
 bench_rank = pd.DataFrame()
@@ -680,7 +659,9 @@ if not ranking_df.empty:
     ranking_df["CurrentAvgScore"] = ranking_df["CurrentAvgScore"].round(1)
 
     if view_by == "All Teams":
-        display_rank = ranking_df.sort_values(["CurrentRankMAS", "BenchmarkRankMAS", "AssociateName"]).copy()
+        display_rank = ranking_df.sort_values(
+            ["BenchmarkRankMAS", "CurrentRankMAS", "AssociateName"]
+        ).copy()
         st.dataframe(
             display_rank[[
                 "ManagerTeam",
@@ -696,7 +677,9 @@ if not ranking_df.empty:
             hide_index=True
         )
     elif view_by in ["Katie", "Charles"]:
-        display_rank = ranking_df.sort_values(["CurrentRankWithinTeam", "BenchmarkRankWithinTeam", "AssociateName"]).copy()
+        display_rank = ranking_df.sort_values(
+            ["BenchmarkRankWithinTeam", "CurrentRankWithinTeam", "AssociateName"]
+        ).copy()
         st.dataframe(
             display_rank[[
                 "AssociateName",
@@ -711,8 +694,11 @@ if not ranking_df.empty:
             hide_index=True
         )
     else:
+        display_rank = ranking_df.sort_values(
+            ["BenchmarkRankMAS", "CurrentRankMAS", "AssociateName"]
+        ).copy()
         st.dataframe(
-            ranking_df[[
+            display_rank[[
                 "ManagerTeam",
                 "AssociateName",
                 "BenchmarkCalls",
@@ -771,10 +757,22 @@ else:
         "ManagerTeam",
         "BenchmarkMonth",
         "BenchmarkQuarter",
+        "BenchmarkMonthNum",
         "Score"
     ]].copy()
+
+    benchmark_detail = benchmark_detail.sort_values(
+        ["BenchmarkQuarter", "BenchmarkMonthNum", "AssociateName"]
+    )
+
     st.dataframe(
-        benchmark_detail.sort_values(["BenchmarkQuarter", "BenchmarkMonthNum", "AssociateName"]),
+        benchmark_detail[[
+            "AssociateName",
+            "ManagerTeam",
+            "BenchmarkMonth",
+            "BenchmarkQuarter",
+            "Score"
+        ]],
         use_container_width=True,
         hide_index=True
     )
