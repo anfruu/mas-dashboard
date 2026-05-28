@@ -153,7 +153,7 @@ def note_box(text: str):
 
 def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [str(c).strip().replace("\n", " ").replace("\r", "").replace("\xa0", " ") for c in df.columns]
+    df.columns = [str(c).strip().replace("\\n", " ").replace("\\r", "").replace("\\xa0", " ") for c in df.columns]
     return df
 
 def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
@@ -252,7 +252,7 @@ MONTH_FIXES = {
     "decemeber": "December",
 }
 
-def normalize_benchmark_month(value: str) -> str:
+def normalize_month_name(value: str) -> str:
     s = str(value).strip()
     if not s:
         return s
@@ -280,8 +280,6 @@ def load_call_data() -> pd.DataFrame:
     failed = pick_col(df, ["CallFailed", "Call Failed"])
     total = pick_col(df, ["TotalScore", "Total Score"])
     pct = pick_col(df, ["Percentage"], required=False)
-    review_month = pick_col(df, ["ReviewMonth", "Review Month"], required=False)
-    review_year = pick_col(df, ["ReviewYear", "Review Year"], required=False)
 
     out = pd.DataFrame({
         "AssociateName": df[assoc].astype(str).str.strip(),
@@ -297,16 +295,6 @@ def load_call_data() -> pd.DataFrame:
     else:
         out["Percentage"] = out["TotalScore"]
 
-    if review_month:
-        out["ReviewMonth"] = df[review_month].astype(str).str.strip()
-    else:
-        out["ReviewMonth"] = ""
-
-    if review_year:
-        out["ReviewYear"] = pd.to_numeric(df[review_year], errors="coerce")
-    else:
-        out["ReviewYear"] = pd.NA
-
     out = out.dropna(subset=["AssociateName", "ManagerTeam", "DateOfCall"], how="all")
     out["MonthLabel"] = month_label(out["DateOfCall"])
     out["QuarterLabel"] = quarter_label(out["DateOfCall"])
@@ -315,10 +303,10 @@ def load_call_data() -> pd.DataFrame:
     return out
 
 # =========================================
-# LOAD Q1 BENCHMARK CALL-LEVEL DATA
+# LOAD Q1 CALL-LEVEL DATA
 # =========================================
 @st.cache_data
-def load_benchmark_data() -> pd.DataFrame:
+def load_q1_data() -> pd.DataFrame:
     df = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data")
     df = clean_cols(df)
     df = df.dropna(how="all")
@@ -332,48 +320,47 @@ def load_benchmark_data() -> pd.DataFrame:
     out = pd.DataFrame({
         "AssociateName": df[assoc].astype(str).str.strip(),
         "ManagerTeam": df[team].astype(str).str.strip(),
-        "BenchmarkMonth": df[month].astype(str).apply(normalize_benchmark_month),
-        "BenchmarkQuarter": df[quarter].astype(str).str.strip(),
+        "Q1Month": df[month].astype(str).apply(normalize_month_name),
+        "Q1Quarter": df[quarter].astype(str).str.strip(),
         "Score": pd.to_numeric(df[score], errors="coerce"),
     })
 
-    out = out.dropna(subset=["AssociateName", "ManagerTeam", "BenchmarkMonth", "Score"], how="any")
+    out = out.dropna(subset=["AssociateName", "ManagerTeam", "Q1Month", "Score"], how="any")
 
-    out["BenchmarkQuarter"] = out["BenchmarkQuarter"].replace({
+    out["Q1Quarter"] = out["Q1Quarter"].replace({
         "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4",
         1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"
     })
 
-    out["BenchmarkMonthNum"] = out["BenchmarkMonth"].map(MONTH_NUM)
-    out = out.dropna(subset=["BenchmarkMonthNum"]).copy()
-    out["BenchmarkMonthNum"] = out["BenchmarkMonthNum"].astype(int)
-    out["BenchmarkPercentage"] = out["Score"]
+    out["Q1MonthNum"] = out["Q1Month"].map(MONTH_NUM)
+    out = out.dropna(subset=["Q1MonthNum"]).copy()
+    out["Q1MonthNum"] = out["Q1MonthNum"].astype(int)
     return out
 
 # =========================================
 # DATA INIT
 # =========================================
 st.title("MAS Dashboard")
-st.caption("Managed Accounts Service metrics, Q1 benchmark comparison, and live grading insights")
+st.caption("Managed Accounts Service metrics, Q1 comparison, and live grading insights")
 
 try:
     call_df = load_call_data()
 except Exception as e:
-    st.error(f"Could not load call grading data: {e}")
+    st.error(f"Could not load current call grading data: {e}")
     call_df = pd.DataFrame()
 
 try:
-    bench_df = load_benchmark_data()
+    q1_df = load_q1_data()
 except Exception as e:
-    st.error(f"Could not load benchmark data: {e}")
-    bench_df = pd.DataFrame()
+    st.error(f"Could not load Q1 data: {e}")
+    q1_df = pd.DataFrame()
 
 # =========================================
 # FILTERS
 # =========================================
 section_header(
     "Dashboard Filters",
-    "Use team, employee, and current-period filters to compare Q1 benchmark performance against April-forward live grading."
+    "Use team, employee, and current-period filters to compare Q1 performance against April-forward live grading."
 )
 
 f1, f2, f3 = st.columns([1, 1, 1])
@@ -388,7 +375,7 @@ with f1:
 all_associates = sorted(
     pd.concat([
         call_df["AssociateName"] if not call_df.empty else pd.Series(dtype=str),
-        bench_df["AssociateName"] if not bench_df.empty else pd.Series(dtype=str)
+        q1_df["AssociateName"] if not q1_df.empty else pd.Series(dtype=str)
     ]).dropna().astype(str).str.strip().unique().tolist()
 )
 
@@ -416,7 +403,7 @@ if not call_df.empty and time_view == "Specific Month":
 # FILTER DATA
 # =========================================
 call_filtered = call_df.copy()
-bench_filtered = bench_df.copy()
+q1_filtered = q1_df.copy()
 
 if time_view == "Current Month" and not call_filtered.empty:
     latest_month = sorted(call_filtered["MonthSort"].dropna().unique().tolist())[-1]
@@ -426,46 +413,47 @@ elif time_view == "Specific Month" and selected_month:
 
 if view_by in ["Katie", "Charles"]:
     call_filtered = call_filtered[call_filtered["ManagerTeam"] == view_by]
-    bench_filtered = bench_filtered[bench_filtered["ManagerTeam"] == view_by]
+    q1_filtered = q1_filtered[q1_filtered["ManagerTeam"] == view_by]
 elif view_by == "Individual Associate" and selected_associate:
     call_filtered = call_filtered[call_filtered["AssociateName"] == selected_associate]
-    bench_filtered = bench_filtered[bench_filtered["AssociateName"] == selected_associate]
+    q1_filtered = q1_filtered[q1_filtered["AssociateName"] == selected_associate]
 
 call_selected_full = call_df.copy()
-bench_selected_full = bench_df.copy()
+q1_selected_full = q1_df.copy()
 
 if view_by in ["Katie", "Charles"]:
     call_selected_full = call_selected_full[call_selected_full["ManagerTeam"] == view_by]
-    bench_selected_full = bench_selected_full[bench_selected_full["ManagerTeam"] == view_by]
+    q1_selected_full = q1_selected_full[q1_selected_full["ManagerTeam"] == view_by]
 elif view_by == "Individual Associate" and selected_associate:
     call_selected_full = call_selected_full[call_selected_full["AssociateName"] == selected_associate]
-    bench_selected_full = bench_selected_full[bench_selected_full["AssociateName"] == selected_associate]
+    q1_selected_full = q1_selected_full[q1_selected_full["AssociateName"] == selected_associate]
 
 # =========================================
 # OVERVIEW
 # =========================================
 section_header(
     "Performance Overview",
-    "Q1 benchmark scores are based on January through March benchmark call records. Live metrics and rates are based on April 1, 2026 forward on any graded call."
-)
-note_box(
-    "Call Failed Rate and First Call Resolution Rate are calculated using April 1, 2026 forward live grading data only. "
-    "Q1 benchmark records are score-only and do not include call dates."
+    "Q1 metrics are considered the benchmark and are based on January through March scored call records. Q1 records are score-only and do not include call dates. Call Failed Rate and First Call Resolution Rate are calculated using April 1, 2026 forward live grading data only."
 )
 
-q1_benchmark_calls = len(bench_filtered)
-q1_benchmark_avg = avg_safe(bench_filtered["Score"])
+q1_calls = len(q1_filtered)
+q1_avg = avg_safe(q1_filtered["Score"])
+q1_total_score = pd.to_numeric(q1_filtered["Score"], errors="coerce").sum()
 
 current_calls = len(call_filtered)
 current_avg = avg_safe(call_filtered["TotalScore"])
+current_total_score = pd.to_numeric(call_filtered["TotalScore"], errors="coerce").sum()
+
 failed_rate = pct_text((call_filtered["CallFailed"] == "Yes").sum(), current_calls)
 fcr_rate = pct_text((call_filtered["IssueResolvedFirstContact"] == "Yes").sum(), current_calls)
 
-delta_vs_benchmark = round(current_avg - q1_benchmark_avg, 1) if q1_benchmark_calls > 0 and current_calls > 0 else 0.0
+ytd_calls = q1_calls + current_calls
+ytd_avg = round(((q1_total_score + current_total_score) / (ytd_calls * 100)) * 100, 1) if ytd_calls > 0 else 0.0
+delta_vs_q1 = round(current_avg - q1_avg, 1) if q1_calls > 0 and current_calls > 0 else 0.0
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Q1 Benchmark Calls", q1_benchmark_calls)
-m2.metric("Q1 Benchmark Avg", q1_benchmark_avg)
+m1.metric("Q1 Calls", q1_calls)
+m2.metric("Q1 Avg", q1_avg)
 m3.metric("Current Calls", current_calls)
 m4.metric("Current Avg", current_avg)
 m5.metric("Call Failed Rate", failed_rate)
@@ -473,31 +461,32 @@ m6.metric("First Call Resolution Rate", fcr_rate)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-d1, d2 = st.columns(2)
-d1.metric("Current vs Q1 Benchmark", f"{delta_vs_benchmark:+.1f}")
-d2.metric("Current View", time_view if time_view != "Specific Month" else selected_month)
+d1, d2, d3 = st.columns(3)
+d1.metric("YTD Calls", ytd_calls)
+d2.metric("YTD Avg", ytd_avg)
+d3.metric("Current vs Q1", f"{delta_vs_q1:+.1f}")
 
 # =========================================
 # MONTH-TO-MONTH COMPARISON
 # =========================================
 section_header(
     "Month-to-Month Comparison",
-    "Q1 benchmark months are compared to April-forward live grading months for the selected view."
+    "Q1 months are compared to April-forward live grading months for the selected view."
 )
 
-bench_monthly = pd.DataFrame()
-if not bench_selected_full.empty:
-    bench_monthly = (
-        bench_selected_full.groupby(["BenchmarkMonth", "BenchmarkMonthNum"], as_index=False)
+q1_monthly = pd.DataFrame()
+if not q1_selected_full.empty:
+    q1_monthly = (
+        q1_selected_full.groupby(["Q1Month", "Q1MonthNum"], as_index=False)
         .agg(
             AvgScore=("Score", "mean"),
             CallCount=("Score", "size")
         )
-        .sort_values("BenchmarkMonthNum")
+        .sort_values("Q1MonthNum")
     )
-    bench_monthly["PeriodLabel"] = bench_monthly["BenchmarkMonth"]
-    bench_monthly["PeriodSort"] = bench_monthly["BenchmarkMonthNum"]
-    bench_monthly["Source"] = "Q1 Benchmark"
+    q1_monthly["PeriodLabel"] = q1_monthly["Q1Month"]
+    q1_monthly["PeriodSort"] = q1_monthly["Q1MonthNum"]
+    q1_monthly["Source"] = "Q1"
 
 current_monthly = pd.DataFrame()
 if not call_selected_full.empty:
@@ -515,7 +504,7 @@ if not call_selected_full.empty:
 
 monthly_compare = pd.concat(
     [
-        bench_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not bench_monthly.empty else pd.DataFrame(),
+        q1_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not q1_monthly.empty else pd.DataFrame(),
         current_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not current_monthly.empty else pd.DataFrame()
     ],
     ignore_index=True
@@ -550,16 +539,16 @@ else:
 # =========================================
 section_header(
     "Quarter Comparison",
-    "Compares Q1 benchmark average against live current quarter averages."
+    "Compares Q1 average against live current quarter averages."
 )
 
 quarter_compare_rows = []
 
-if not bench_selected_full.empty:
+if not q1_selected_full.empty:
     quarter_compare_rows.append({
-        "Quarter": "Q1 Benchmark",
-        "AvgScore": avg_safe(bench_selected_full["Score"]),
-        "CallCount": int(len(bench_selected_full))
+        "Quarter": "Q1",
+        "AvgScore": avg_safe(q1_selected_full["Score"]),
+        "CallCount": int(len(q1_selected_full))
     })
 
 if not call_selected_full.empty:
@@ -605,25 +594,22 @@ else:
 # =========================================
 section_header(
     "Ranking Comparison",
-    "Q1 benchmark rank is shown first, with the current rank displayed alongside it."
+    "Shows Prior Rank from Q1 next to Current Rank."
 )
 
-bench_rank = pd.DataFrame()
-if not bench_selected_full.empty:
-    bench_rank = (
-        bench_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
-        .agg(
-            BenchmarkCalls=("Score", "size"),
-            BenchmarkAvgScore=("Score", "mean")
-        )
+q1_rank = pd.DataFrame()
+if not q1_selected_full.empty:
+    q1_rank = (
+        q1_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
+        .agg(Q1AvgScore=("Score", "mean"))
     )
-    bench_rank["BenchmarkRankWithinTeam"] = (
-        bench_rank.groupby("ManagerTeam")["BenchmarkAvgScore"]
+    q1_rank["Prior Rank"] = (
+        q1_rank.groupby("ManagerTeam")["Q1AvgScore"]
         .rank(method="dense", ascending=False)
         .astype(int)
     )
-    bench_rank["BenchmarkRankMAS"] = (
-        bench_rank["BenchmarkAvgScore"]
+    q1_rank["Prior Rank MAS"] = (
+        q1_rank["Q1AvgScore"]
         .rank(method="dense", ascending=False)
         .astype(int)
     )
@@ -632,82 +618,70 @@ current_rank = pd.DataFrame()
 if not call_selected_full.empty:
     current_rank = (
         call_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
-        .agg(
-            CurrentCalls=("TotalScore", "size"),
-            CurrentAvgScore=("TotalScore", "mean")
-        )
+        .agg(CurrentAvgScore=("TotalScore", "mean"))
     )
-    current_rank["CurrentRankWithinTeam"] = (
+    current_rank["Current Rank"] = (
         current_rank.groupby("ManagerTeam")["CurrentAvgScore"]
         .rank(method="dense", ascending=False)
         .astype(int)
     )
-    current_rank["CurrentRankMAS"] = (
+    current_rank["Current Rank MAS"] = (
         current_rank["CurrentAvgScore"]
         .rank(method="dense", ascending=False)
         .astype(int)
     )
 
-ranking_df = bench_rank.merge(
+ranking_df = q1_rank.merge(
     current_rank,
     on=["ManagerTeam", "AssociateName"],
     how="outer"
 )
 
 if not ranking_df.empty:
-    ranking_df["BenchmarkAvgScore"] = ranking_df["BenchmarkAvgScore"].round(1)
-    ranking_df["CurrentAvgScore"] = ranking_df["CurrentAvgScore"].round(1)
-
     if view_by == "All Teams":
         display_rank = ranking_df.sort_values(
-            ["BenchmarkRankMAS", "CurrentRankMAS", "AssociateName"]
+            ["Prior Rank MAS", "Current Rank MAS", "AssociateName"]
         ).copy()
         st.dataframe(
             display_rank[[
                 "ManagerTeam",
                 "AssociateName",
-                "BenchmarkCalls",
-                "BenchmarkAvgScore",
-                "BenchmarkRankMAS",
-                "CurrentCalls",
-                "CurrentAvgScore",
-                "CurrentRankMAS"
-            ]],
+                "Prior Rank MAS",
+                "Current Rank MAS"
+            ]].rename(columns={
+                "Prior Rank MAS": "Prior Rank",
+                "Current Rank MAS": "Current Rank"
+            }),
             use_container_width=True,
             hide_index=True
         )
     elif view_by in ["Katie", "Charles"]:
         display_rank = ranking_df.sort_values(
-            ["BenchmarkRankWithinTeam", "CurrentRankWithinTeam", "AssociateName"]
+            ["Prior Rank", "Current Rank", "AssociateName"]
         ).copy()
         st.dataframe(
             display_rank[[
                 "AssociateName",
-                "BenchmarkCalls",
-                "BenchmarkAvgScore",
-                "BenchmarkRankWithinTeam",
-                "CurrentCalls",
-                "CurrentAvgScore",
-                "CurrentRankWithinTeam"
+                "Prior Rank",
+                "Current Rank"
             ]],
             use_container_width=True,
             hide_index=True
         )
     else:
         display_rank = ranking_df.sort_values(
-            ["BenchmarkRankMAS", "CurrentRankMAS", "AssociateName"]
+            ["Prior Rank MAS", "Current Rank MAS", "AssociateName"]
         ).copy()
         st.dataframe(
             display_rank[[
                 "ManagerTeam",
                 "AssociateName",
-                "BenchmarkCalls",
-                "BenchmarkAvgScore",
-                "BenchmarkRankMAS",
-                "CurrentCalls",
-                "CurrentAvgScore",
-                "CurrentRankMAS"
-            ]],
+                "Prior Rank MAS",
+                "Current Rank MAS"
+            ]].rename(columns={
+                "Prior Rank MAS": "Prior Rank",
+                "Current Rank MAS": "Current Rank"
+            }),
             use_container_width=True,
             hide_index=True
         )
@@ -742,37 +716,40 @@ else:
     )
 
 # =========================================
-# Q1 BENCHMARK CALL SCORES
+# Q1 CALL SCORES
 # =========================================
 section_header(
-    "Q1 Benchmark Call Scores",
-    "January through March benchmark call scores are listed by month because historical benchmark records do not include call dates."
+    "Q1 Call Scores",
+    "January through March call scores are listed by month because historical Q1 records do not include call dates."
 )
 
-if bench_filtered.empty:
-    st.info("No Q1 benchmark call scores available for the selected filters.")
+if q1_filtered.empty:
+    st.info("No Q1 call scores available for the selected filters.")
 else:
-    benchmark_detail = bench_filtered[[
+    q1_detail = q1_filtered[[
         "AssociateName",
         "ManagerTeam",
-        "BenchmarkMonth",
-        "BenchmarkQuarter",
-        "BenchmarkMonthNum",
+        "Q1Month",
+        "Q1Quarter",
+        "Q1MonthNum",
         "Score"
     ]].copy()
 
-    benchmark_detail = benchmark_detail.sort_values(
-        ["BenchmarkQuarter", "BenchmarkMonthNum", "AssociateName"]
+    q1_detail = q1_detail.sort_values(
+        ["Q1Quarter", "Q1MonthNum", "AssociateName"]
     )
 
     st.dataframe(
-        benchmark_detail[[
+        q1_detail[[
             "AssociateName",
             "ManagerTeam",
-            "BenchmarkMonth",
-            "BenchmarkQuarter",
+            "Q1Month",
+            "Q1Quarter",
             "Score"
-        ]],
+        ]].rename(columns={
+            "Q1Month": "Month",
+            "Q1Quarter": "Quarter"
+        }),
         use_container_width=True,
         hide_index=True
     )
