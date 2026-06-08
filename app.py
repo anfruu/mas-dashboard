@@ -246,7 +246,6 @@ MONTH_FIXES = {
     "marhc": "March",
     "aplir": "April",
     "agust": "August",
-    "september": "September",
     "ocotber": "October",
     "novemeber": "November",
     "decemeber": "December",
@@ -263,6 +262,17 @@ def normalize_month_name(value: str) -> str:
     if s_title in MONTH_NUM:
         return s_title
     return s_title
+
+def view_avg(df: pd.DataFrame, score_col: str, individual_view: bool) -> float:
+    if df.empty:
+        return 0.0
+    if individual_view:
+        return avg_safe(df[score_col])
+    employee_avg = (
+        df.groupby("AssociateName", as_index=False)[score_col]
+        .mean()[score_col]
+    )
+    return round(float(employee_avg.mean()), 1) if not employee_avg.empty else 0.0
 
 # =========================================
 # LOAD CURRENT CALL DATA
@@ -300,6 +310,7 @@ def load_call_data() -> pd.DataFrame:
     out["QuarterLabel"] = quarter_label(out["DateOfCall"])
     out["MonthSort"] = out["DateOfCall"].dt.to_period("M").astype(str)
     out["QuarterSort"] = out["DateOfCall"].dt.to_period("Q").astype(str)
+    out["MonthNum"] = out["DateOfCall"].dt.month
     return out
 
 # =========================================
@@ -354,6 +365,15 @@ try:
 except Exception as e:
     st.error(f"Could not load Q1 data: {e}")
     q1_df = pd.DataFrame()
+
+# =========================================
+# TOP DISCLAIMER
+# =========================================
+note_box(
+    "Q1 metrics are considered the benchmark and are based on January through March scored call records. "
+    "Q1 records are score-only and do not include call dates. "
+    "Call Failed Rate and First Call Resolution Rate are calculated using April 1, 2026 forward live grading data only."
+)
 
 # =========================================
 # FILTERS
@@ -428,27 +448,54 @@ elif view_by == "Individual Associate" and selected_associate:
     call_selected_full = call_selected_full[call_selected_full["AssociateName"] == selected_associate]
     q1_selected_full = q1_selected_full[q1_selected_full["AssociateName"] == selected_associate]
 
+individual_view = view_by == "Individual Associate"
+
 # =========================================
 # OVERVIEW
 # =========================================
 section_header(
     "Performance Overview",
-    "Q1 metrics are considered the benchmark and are based on January through March scored call records. Q1 records are score-only and do not include call dates. Call Failed Rate and First Call Resolution Rate are calculated using April 1, 2026 forward live grading data only."
+    "Q1 and current performance metrics for the selected view."
 )
 
 q1_calls = len(q1_filtered)
-q1_avg = avg_safe(q1_filtered["Score"])
 q1_total_score = pd.to_numeric(q1_filtered["Score"], errors="coerce").sum()
+q1_avg = view_avg(q1_filtered, "Score", individual_view)
 
 current_calls = len(call_filtered)
-current_avg = avg_safe(call_filtered["TotalScore"])
 current_total_score = pd.to_numeric(call_filtered["TotalScore"], errors="coerce").sum()
+current_avg = view_avg(call_filtered, "TotalScore", individual_view)
 
 failed_rate = pct_text((call_filtered["CallFailed"] == "Yes").sum(), current_calls)
 fcr_rate = pct_text((call_filtered["IssueResolvedFirstContact"] == "Yes").sum(), current_calls)
 
 ytd_calls = q1_calls + current_calls
-ytd_avg = round(((q1_total_score + current_total_score) / (ytd_calls * 100)) * 100, 1) if ytd_calls > 0 else 0.0
+
+if individual_view:
+    ytd_avg = round(((q1_total_score + current_total_score) / ytd_calls), 1) if ytd_calls > 0 else 0.0
+else:
+    q1_emp = (
+        q1_filtered.groupby("AssociateName", as_index=False)
+        .agg(Q1Score=("Score", "sum"), Q1Calls=("Score", "size"))
+    ) if not q1_filtered.empty else pd.DataFrame(columns=["AssociateName", "Q1Score", "Q1Calls"])
+
+    current_emp = (
+        call_filtered.groupby("AssociateName", as_index=False)
+        .agg(CurrentScore=("TotalScore", "sum"), CurrentCalls=("TotalScore", "size"))
+    ) if not call_filtered.empty else pd.DataFrame(columns=["AssociateName", "CurrentScore", "CurrentCalls"])
+
+    ytd_emp = q1_emp.merge(current_emp, on="AssociateName", how="outer").fillna(0)
+    if not ytd_emp.empty:
+        ytd_emp["YTDCalls"] = ytd_emp["Q1Calls"] + ytd_emp["CurrentCalls"]
+        ytd_emp["YTDScore"] = ytd_emp["Q1Score"] + ytd_emp["CurrentScore"]
+        ytd_emp["YTDAvg"] = ytd_emp.apply(
+            lambda r: (r["YTDScore"] / r["YTDCalls"]) if r["YTDCalls"] > 0 else pd.NA,
+            axis=1
+        )
+        ytd_avg = round(pd.to_numeric(ytd_emp["YTDAvg"], errors="coerce").dropna().mean(), 1) if not ytd_emp["YTDAvg"].dropna().empty else 0.0
+    else:
+        ytd_avg = 0.0
+
 delta_vs_q1 = round(current_avg - q1_avg, 1) if q1_calls > 0 and current_calls > 0 else 0.0
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
@@ -476,30 +523,42 @@ section_header(
 
 q1_monthly = pd.DataFrame()
 if not q1_selected_full.empty:
-    q1_monthly = (
-        q1_selected_full.groupby(["Q1Month", "Q1MonthNum"], as_index=False)
-        .agg(
-            AvgScore=("Score", "mean"),
-            CallCount=("Score", "size")
-        )
-        .sort_values("Q1MonthNum")
+    q1_month_emp = (
+        q1_selected_full.groupby(["Q1Month", "Q1MonthNum", "AssociateName"], as_index=False)
+        .agg(EmployeeAvg=("Score", "mean"))
     )
+    q1_month_calls = (
+        q1_selected_full.groupby(["Q1Month", "Q1MonthNum"], as_index=False)
+        .agg(CallCount=("Score", "size"))
+    )
+    q1_month_avg = (
+        q1_month_emp.groupby(["Q1Month", "Q1MonthNum"], as_index=False)
+        .agg(AvgScore=("EmployeeAvg", "mean"))
+    )
+    q1_monthly = q1_month_avg.merge(q1_month_calls, on=["Q1Month", "Q1MonthNum"], how="left")
     q1_monthly["PeriodLabel"] = q1_monthly["Q1Month"]
     q1_monthly["PeriodSort"] = q1_monthly["Q1MonthNum"]
     q1_monthly["Source"] = "Q1"
 
 current_monthly = pd.DataFrame()
 if not call_selected_full.empty:
-    current_monthly = (
-        call_selected_full.groupby(["MonthLabel", "MonthSort"], as_index=False)
-        .agg(
-            AvgScore=("TotalScore", "mean"),
-            CallCount=("TotalScore", "size")
-        )
-        .sort_values("MonthSort")
+    current_month_emp = (
+        call_selected_full.groupby(["MonthLabel", "MonthSort", "MonthNum", "AssociateName"], as_index=False)
+        .agg(EmployeeAvg=("TotalScore", "mean"))
+    )
+    current_month_calls = (
+        call_selected_full.groupby(["MonthLabel", "MonthSort", "MonthNum"], as_index=False)
+        .agg(CallCount=("TotalScore", "size"))
+    )
+    current_month_avg = (
+        current_month_emp.groupby(["MonthLabel", "MonthSort", "MonthNum"], as_index=False)
+        .agg(AvgScore=("EmployeeAvg", "mean"))
+    )
+    current_monthly = current_month_avg.merge(
+        current_month_calls, on=["MonthLabel", "MonthSort", "MonthNum"], how="left"
     )
     current_monthly["PeriodLabel"] = current_monthly["MonthLabel"]
-    current_monthly["PeriodSort"] = range(4, 4 + len(current_monthly))
+    current_monthly["PeriodSort"] = current_monthly["MonthNum"]
     current_monthly["Source"] = "Current"
 
 monthly_compare = pd.concat(
@@ -545,22 +604,36 @@ section_header(
 quarter_compare_rows = []
 
 if not q1_selected_full.empty:
+    if individual_view:
+        q1_quarter_avg = avg_safe(q1_selected_full["Score"])
+    else:
+        q1_quarter_emp = (
+            q1_selected_full.groupby("AssociateName", as_index=False)
+            .agg(EmployeeAvg=("Score", "mean"))
+        )
+        q1_quarter_avg = round(q1_quarter_emp["EmployeeAvg"].mean(), 1) if not q1_quarter_emp.empty else 0.0
+
     quarter_compare_rows.append({
         "Quarter": "Q1",
-        "AvgScore": avg_safe(q1_selected_full["Score"]),
+        "AvgScore": q1_quarter_avg,
         "CallCount": int(len(q1_selected_full))
     })
 
 if not call_selected_full.empty:
-    current_quarter = (
-        call_selected_full.groupby(["QuarterLabel", "QuarterSort"], as_index=False)
-        .agg(
-            AvgScore=("TotalScore", "mean"),
-            CallCount=("TotalScore", "size")
-        )
-        .sort_values("QuarterSort")
+    current_quarter_emp = (
+        call_selected_full.groupby(["QuarterLabel", "QuarterSort", "AssociateName"], as_index=False)
+        .agg(EmployeeAvg=("TotalScore", "mean"))
     )
-    for _, row in current_quarter.iterrows():
+    current_quarter_calls = (
+        call_selected_full.groupby(["QuarterLabel", "QuarterSort"], as_index=False)
+        .agg(CallCount=("TotalScore", "size"))
+    )
+    current_quarter_avg = (
+        current_quarter_emp.groupby(["QuarterLabel", "QuarterSort"], as_index=False)
+        .agg(AvgScore=("EmployeeAvg", "mean"))
+    ).merge(current_quarter_calls, on=["QuarterLabel", "QuarterSort"], how="left").sort_values("QuarterSort")
+
+    for _, row in current_quarter_avg.iterrows():
         quarter_compare_rows.append({
             "Quarter": row["QuarterLabel"],
             "AvgScore": float(row["AvgScore"]),
@@ -590,130 +663,90 @@ else:
     st.info("No quarter comparison data available for the selected view.")
 
 # =========================================
-# RANKING COMPARISON
+# RANKING
 # =========================================
 section_header(
-    "Ranking Comparison",
-    "Shows Prior Rank from Q1 next to Current Rank."
+    "YTD Ranking",
+    "Ranks each employee by individual YTD average."
 )
 
-q1_rank = pd.DataFrame()
-if not q1_selected_full.empty:
-    q1_rank = (
-        q1_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
-        .agg(Q1AvgScore=("Score", "mean"))
-    )
-    q1_rank["Prior Rank"] = (
-        q1_rank.groupby("ManagerTeam")["Q1AvgScore"]
-        .rank(method="dense", ascending=False)
-        .astype(int)
-    )
-    q1_rank["Prior Rank MAS"] = (
-        q1_rank["Q1AvgScore"]
-        .rank(method="dense", ascending=False)
-        .astype(int)
-    )
+q1_rank = (
+    q1_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
+    .agg(Q1Score=("Score", "sum"), Q1Calls=("Score", "size"))
+) if not q1_selected_full.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "Q1Score", "Q1Calls"])
 
-current_rank = pd.DataFrame()
-if not call_selected_full.empty:
-    current_rank = (
-        call_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
-        .agg(CurrentAvgScore=("TotalScore", "mean"))
-    )
-    current_rank["Current Rank"] = (
-        current_rank.groupby("ManagerTeam")["CurrentAvgScore"]
-        .rank(method="dense", ascending=False)
-        .astype(int)
-    )
-    current_rank["Current Rank MAS"] = (
-        current_rank["CurrentAvgScore"]
-        .rank(method="dense", ascending=False)
-        .astype(int)
-    )
+current_rank = (
+    call_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
+    .agg(CurrentScore=("TotalScore", "sum"), CurrentCalls=("TotalScore", "size"))
+) if not call_selected_full.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "CurrentScore", "CurrentCalls"])
 
-ranking_df = q1_rank.merge(
-    current_rank,
-    on=["ManagerTeam", "AssociateName"],
-    how="outer"
-)
+ranking_df = q1_rank.merge(current_rank, on=["ManagerTeam", "AssociateName"], how="outer").fillna(0)
 
 if not ranking_df.empty:
+    ranking_df["YTDCalls"] = ranking_df["Q1Calls"] + ranking_df["CurrentCalls"]
+    ranking_df["YTDScore"] = ranking_df["Q1Score"] + ranking_df["CurrentScore"]
+    ranking_df["YTDAvg"] = ranking_df.apply(
+        lambda r: (r["YTDScore"] / r["YTDCalls"]) if r["YTDCalls"] > 0 else pd.NA,
+        axis=1
+    )
+
     if view_by == "All Teams":
-        display_rank = ranking_df.sort_values(
-            ["Prior Rank MAS", "Current Rank MAS", "AssociateName"]
-        ).copy()
+        ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
+        display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
         st.dataframe(
-            display_rank[[
-                "ManagerTeam",
-                "AssociateName",
-                "Prior Rank MAS",
-                "Current Rank MAS"
-            ]].rename(columns={
-                "Prior Rank MAS": "Prior Rank",
-                "Current Rank MAS": "Current Rank"
-            }),
+            display_rank[["ManagerTeam", "AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
             use_container_width=True,
             hide_index=True
         )
     elif view_by in ["Katie", "Charles"]:
-        display_rank = ranking_df.sort_values(
-            ["Prior Rank", "Current Rank", "AssociateName"]
-        ).copy()
+        ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
+        display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
         st.dataframe(
-            display_rank[[
-                "AssociateName",
-                "Prior Rank",
-                "Current Rank"
-            ]],
+            display_rank[["AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
             use_container_width=True,
             hide_index=True
         )
     else:
-        display_rank = ranking_df.sort_values(
-            ["Prior Rank MAS", "Current Rank MAS", "AssociateName"]
-        ).copy()
+        ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
+        display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
         st.dataframe(
-            display_rank[[
-                "ManagerTeam",
-                "AssociateName",
-                "Prior Rank MAS",
-                "Current Rank MAS"
-            ]].rename(columns={
-                "Prior Rank MAS": "Prior Rank",
-                "Current Rank MAS": "Current Rank"
-            }),
+            display_rank[["AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
             use_container_width=True,
             hide_index=True
         )
 else:
-    st.info("No ranking comparison available for the selected view.")
+    st.info("No YTD ranking available for the selected view.")
 
 # =========================================
 # LIVE CURRENT DETAIL
 # =========================================
-section_header(
-    "Current Graded Call Detail",
-    "April 1, 2026 forward on any graded call."
-)
-
-if call_filtered.empty:
-    st.info("No current graded call detail available for the selected filters.")
-else:
-    current_detail = call_filtered[[
-        "AssociateName",
-        "ManagerTeam",
-        "DateOfCall",
-        "TotalScore",
-        "Percentage",
-        "CallFailed",
-        "IssueResolvedFirstContact"
-    ]].copy()
-    current_detail["Percentage"] = current_detail["Percentage"].round(1)
-    st.dataframe(
-        current_detail.sort_values("DateOfCall", ascending=False),
-        use_container_width=True,
-        hide_index=True
+if view_by != "All Teams":
+    section_header(
+        "Current Graded Call Detail",
+        "April 1, 2026 forward on any graded call."
     )
+
+    if call_filtered.empty:
+        st.info("No current graded call detail available for the selected filters.")
+    else:
+        current_detail = call_filtered[[
+            "AssociateName",
+            "ManagerTeam",
+            "DateOfCall",
+            "TotalScore",
+            "Percentage",
+            "CallFailed",
+            "IssueResolvedFirstContact"
+        ]].copy()
+
+        current_detail["DateOfCall"] = pd.to_datetime(current_detail["DateOfCall"], errors="coerce").dt.strftime("%m/%d/%Y")
+        current_detail["Percentage"] = current_detail["Percentage"].round(1)
+
+        st.dataframe(
+            current_detail.sort_values("DateOfCall", ascending=False),
+            use_container_width=True,
+            hide_index=True
+        )
 
 # =========================================
 # Q1 CALL SCORES
