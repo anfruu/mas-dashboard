@@ -153,7 +153,7 @@ def note_box(text: str):
 
 def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [str(c).strip().replace("\\n", " ").replace("\\r", "").replace("\\xa0", " ") for c in df.columns]
+    df.columns = [str(c).strip().replace("\n", " ").replace("\r", "").replace("\xa0", " ") for c in df.columns]
     return df
 
 def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
@@ -225,7 +225,16 @@ def apply_layout(fig, height=360, show_legend=True):
 def month_label(dt_series: pd.Series) -> pd.Series:
     return dt_series.dt.strftime("%b %Y")
 
+# --- CHANGED ---
+# Was: dt_series.dt.to_period("Q").astype(str)  -> produced "2026Q2" / "2026Q3",
+# which did not match the hardcoded "Q1" label coming from the benchmark file.
+# Now emits clean "Q1" / "Q2" / "Q3" / "Q4" labels that line up with Q1.
 def quarter_label(dt_series: pd.Series) -> pd.Series:
+    q = dt_series.dt.quarter
+    return q.apply(lambda x: f"Q{int(x)}" if pd.notna(x) else pd.NA)
+
+# Sort key stays year-aware so quarters order correctly across years.
+def quarter_sort(dt_series: pd.Series) -> pd.Series:
     return dt_series.dt.to_period("Q").astype(str)
 
 MONTH_NUM = {
@@ -307,9 +316,9 @@ def load_call_data() -> pd.DataFrame:
 
     out = out.dropna(subset=["AssociateName", "ManagerTeam", "DateOfCall"], how="all")
     out["MonthLabel"] = month_label(out["DateOfCall"])
-    out["QuarterLabel"] = quarter_label(out["DateOfCall"])
+    out["QuarterLabel"] = quarter_label(out["DateOfCall"])      # <-- now "Q2" / "Q3"
     out["MonthSort"] = out["DateOfCall"].dt.to_period("M").astype(str)
-    out["QuarterSort"] = out["DateOfCall"].dt.to_period("Q").astype(str)
+    out["QuarterSort"] = quarter_sort(out["DateOfCall"])        # <-- "2026Q2" (sort only)
     out["MonthNum"] = out["DateOfCall"].dt.month
     return out
 
@@ -372,6 +381,7 @@ except Exception as e:
 note_box(
     "Q1 metrics are considered the benchmark and are based on January through March scored call records. "
     "Q1 records are score-only and do not include call dates. "
+    "Q2 (April 1 through June 30, 2026) is final. Q3 is in progress. "
     "Call Failed Rate and First Call Resolution Rate are calculated using April 1, 2026 forward live grading data only."
 )
 
@@ -404,10 +414,32 @@ with f2:
     if view_by == "Individual Associate":
         selected_associate = st.selectbox("Associate Name", all_associates)
 
+# --- CHANGED ---
+# Quarter options are built from whatever quarters actually exist in the call file.
+# Q4 will appear on its own in October; Q1 2027 on its own in January. No code edit ever.
+# The newest quarter is labeled "Current Quarter"; every closed quarter is labeled "Final".
+quarter_options = []
+quarter_lookup = {}
+if not call_df.empty:
+    q_sorted = (
+        call_df[["QuarterLabel", "QuarterSort"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values("QuarterSort")
+    )
+    q_labels = q_sorted["QuarterLabel"].tolist()
+    for i, q in enumerate(q_labels):
+        suffix = "Current Quarter" if i == len(q_labels) - 1 else "Final"
+        opt = f"{q} ({suffix})"
+        quarter_options.append(opt)
+        quarter_lookup[opt] = q
+
+# Change index=0 to index=1 if you want the dashboard to open on the first quarter
+# in the list (Q2 today) instead of blended "All Current Data".
 with f3:
     time_view = st.selectbox(
         "Current Data View",
-        ["All Current Data", "Current Month", "Specific Month"],
+        ["All Current Data"] + quarter_options + ["Current Month", "Specific Month"],
         index=0
     )
 
@@ -425,11 +457,15 @@ if not call_df.empty and time_view == "Specific Month":
 call_filtered = call_df.copy()
 q1_filtered = q1_df.copy()
 
-if time_view == "Current Month" and not call_filtered.empty:
-    latest_month = sorted(call_filtered["MonthSort"].dropna().unique().tolist())[-1]
-    call_filtered = call_filtered[call_filtered["MonthSort"] == latest_month]
-elif time_view == "Specific Month" and selected_month:
-    call_filtered = call_filtered[call_filtered["MonthLabel"] == selected_month]
+# --- CHANGED --- quarter-aware period filtering, driven by the dynamic lookup above
+if not call_filtered.empty:
+    if time_view in quarter_lookup:
+        call_filtered = call_filtered[call_filtered["QuarterLabel"] == quarter_lookup[time_view]]
+    elif time_view == "Current Month":
+        latest_month = sorted(call_filtered["MonthSort"].dropna().unique().tolist())[-1]
+        call_filtered = call_filtered[call_filtered["MonthSort"] == latest_month]
+    elif time_view == "Specific Month" and selected_month:
+        call_filtered = call_filtered[call_filtered["MonthLabel"] == selected_month]
 
 if view_by in ["Katie", "Charles"]:
     call_filtered = call_filtered[call_filtered["ManagerTeam"] == view_by]
@@ -598,7 +634,7 @@ else:
 # =========================================
 section_header(
     "Quarter Comparison",
-    "Compares Q1 average against live current quarter averages."
+    "Q1 benchmark against finalized Q2 and the in-progress current quarter. Bar labels show quarter-over-quarter movement."
 )
 
 quarter_compare_rows = []
@@ -615,7 +651,8 @@ if not q1_selected_full.empty:
 
     quarter_compare_rows.append({
         "Quarter": "Q1",
-        "AvgScore": q1_quarter_avg,
+        "QuarterSort": "2026Q1",
+        "AvgScore": float(q1_quarter_avg),
         "CallCount": int(len(q1_selected_full))
     })
 
@@ -636,6 +673,7 @@ if not call_selected_full.empty:
     for _, row in current_quarter_avg.iterrows():
         quarter_compare_rows.append({
             "Quarter": row["QuarterLabel"],
+            "QuarterSort": row["QuarterSort"],
             "AvgScore": float(row["AvgScore"]),
             "CallCount": int(row["CallCount"])
         })
@@ -643,20 +681,37 @@ if not call_selected_full.empty:
 quarter_compare_df = pd.DataFrame(quarter_compare_rows)
 
 if not quarter_compare_df.empty:
-    quarter_compare_df["BarLabel"] = quarter_compare_df.apply(
-        lambda r: f"{r['AvgScore']:.1f}<br>{int(r['CallCount'])} calls",
-        axis=1
+    quarter_compare_df = quarter_compare_df.sort_values("QuarterSort").reset_index(drop=True)
+
+    # --- NEW --- quarter-over-quarter delta
+    quarter_compare_df["QoQ"] = quarter_compare_df["AvgScore"].diff().round(1)
+
+    # Latest quarter is still open; flag it so nobody reads a partial quarter as final.
+    latest_quarter = quarter_compare_df["Quarter"].iloc[-1]
+    quarter_compare_df["Status"] = quarter_compare_df["Quarter"].apply(
+        lambda q: "In Progress" if q == latest_quarter else "Final"
     )
+
+    def _bar_label(r):
+        base = f"{r['AvgScore']:.1f}<br>{int(r['CallCount'])} calls"
+        if pd.notna(r["QoQ"]):
+            base += f"<br>{r['QoQ']:+.1f} QoQ"
+        return base
+
+    quarter_compare_df["BarLabel"] = quarter_compare_df.apply(_bar_label, axis=1)
+
     fig_quarter = px.bar(
         quarter_compare_df,
         x="Quarter",
         y="AvgScore",
         text="BarLabel",
+        color="Status",
+        color_discrete_map={"Final": PRIMARY, "In Progress": SLATE},
         title="Average Score by Quarter"
     )
-    fig_quarter.update_traces(marker_color=PRIMARY, textposition="outside")
-    fig_quarter = apply_layout(fig_quarter, height=330, show_legend=False)
-    fig_quarter.update_xaxes(title="")
+    fig_quarter.update_traces(textposition="outside")
+    fig_quarter = apply_layout(fig_quarter, height=330, show_legend=True)
+    fig_quarter.update_xaxes(title="", categoryorder="array", categoryarray=quarter_compare_df["Quarter"].tolist())
     fig_quarter.update_yaxes(title="Avg Score")
     st.plotly_chart(fig_quarter, use_container_width=True)
 else:
@@ -689,26 +744,16 @@ if not ranking_df.empty:
         lambda r: (r["YTDScore"] / r["YTDCalls"]) if r["YTDCalls"] > 0 else pd.NA,
         axis=1
     )
+    ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
+    display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
 
     if view_by == "All Teams":
-        ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
-        display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
         st.dataframe(
             display_rank[["ManagerTeam", "AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
             use_container_width=True,
             hide_index=True
         )
-    elif view_by in ["Katie", "Charles"]:
-        ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
-        display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
-        st.dataframe(
-            display_rank[["AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
-            use_container_width=True,
-            hide_index=True
-        )
     else:
-        ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
-        display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
         st.dataframe(
             display_rank[["AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
             use_container_width=True,
@@ -739,11 +784,12 @@ if view_by != "All Teams":
             "IssueResolvedFirstContact"
         ]].copy()
 
+        current_detail = current_detail.sort_values("DateOfCall", ascending=False)
         current_detail["DateOfCall"] = pd.to_datetime(current_detail["DateOfCall"], errors="coerce").dt.strftime("%m/%d/%Y")
         current_detail["Percentage"] = current_detail["Percentage"].round(1)
 
         st.dataframe(
-            current_detail.sort_values("DateOfCall", ascending=False),
+            current_detail,
             use_container_width=True,
             hide_index=True
         )
