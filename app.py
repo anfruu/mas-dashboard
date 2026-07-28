@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from pathlib import Path
 
 st.set_page_config(page_title="MAS Dashboard", layout="wide")
@@ -10,37 +11,38 @@ CALL_FILE = BASE_DIR / "MAS_Call_Grading_Raw_Data.xlsx"
 BENCH_FILE = BASE_DIR / "MAS_Benchmarks.xlsx"
 
 # =========================================
-# STYLING
+# CONFIG
 # =========================================
-TEXT_COLOR = "#102033"
-SUBTEXT_COLOR = "#556476"
-BORDER = "#D9E2EC"
-CARD_BG = "#F7FAFC"
-PAGE_BG = "#F4F8FB"
-SECTION_BG = "#FFFFFF"
+# The Q1 file carries no call dates. This year is used only to build
+# readable month labels ("Jan 2026") for the Q1 months in the period list.
+Q1_YEAR = 2026
 
-PRIMARY = "#2F5D8C"
-SECONDARY = "#4F8A8B"
-ACCENT = "#7A6FA6"
-WARM = "#C28B52"
-SOFT_RED = "#B86A6A"
-SLATE = "#60758A"
+# =========================================
+# LPL PALETTE
+# =========================================
+LPL_NAVY = "#1F3864"
+LPL_NAVY_SOFT = "#8FA6C4"
+LPL_ORANGE = "#E87722"
 
-TEAM_COLORS = {
-    "Katie": PRIMARY,
-    "Charles": SECONDARY,
-    "MAS": ACCENT
-}
+TEXT_COLOR = "#1B2430"
+SUBTEXT_COLOR = "#5C6875"
+BORDER = "#DCE2EA"
+CARD_BG = "#FFFFFF"
+PAGE_BG = "#F4F6F9"
+GRID = "#E8ECF2"
+
+SRC_Q1 = LPL_NAVY_SOFT
+SRC_LIVE = LPL_NAVY
+STATUS_FINAL = LPL_NAVY
+STATUS_OPEN = LPL_ORANGE
 
 st.markdown(f"""
 <style>
-    .stApp {{
-        background: linear-gradient(180deg, {PAGE_BG} 0%, #EEF3F7 100%);
-    }}
+    .stApp {{ background: {PAGE_BG}; }}
 
     .block-container {{
         padding-top: 1rem;
-        padding-bottom: 2rem;
+        padding-bottom: 2.5rem;
         max-width: 1520px;
     }}
 
@@ -50,40 +52,47 @@ st.markdown(f"""
     }}
 
     h1 {{
-        color: {TEXT_COLOR} !important;
+        color: {LPL_NAVY} !important;
         font-weight: 800 !important;
         letter-spacing: -0.03em;
         margin-bottom: 0.12rem !important;
     }}
 
     h2, h3, h4, h5, h6 {{
-        color: {TEXT_COLOR} !important;
+        color: {LPL_NAVY} !important;
         font-weight: 700 !important;
         letter-spacing: -0.02em;
     }}
 
-    p, label, .stCaption {{
-        color: {SUBTEXT_COLOR} !important;
-    }}
+    p, label, .stCaption {{ color: {SUBTEXT_COLOR} !important; }}
 
     div[data-testid="stMetric"] {{
-        background: linear-gradient(180deg, #FFFFFF 0%, {CARD_BG} 100%);
+        background: {CARD_BG};
         border: 1px solid {BORDER};
-        border-radius: 16px;
-        padding: 16px 18px;
-        box-shadow: 0 3px 10px rgba(16, 32, 51, 0.04);
+        border-left: 4px solid {LPL_NAVY};
+        border-radius: 10px;
+        padding: 15px 16px;
+        box-shadow: 0 2px 6px rgba(31, 56, 100, 0.06);
+        height: 100%;
     }}
 
     div[data-testid="stMetricLabel"] {{
         color: {SUBTEXT_COLOR} !important;
-        font-weight: 700 !important;
-        font-size: 0.92rem !important;
+        font-weight: 600 !important;
+        font-size: 0.76rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        line-height: 1.35;
     }}
 
     div[data-testid="stMetricValue"] {{
-        color: {TEXT_COLOR} !important;
+        color: {LPL_NAVY} !important;
         font-weight: 800 !important;
         font-size: 1.65rem !important;
+    }}
+
+    div[data-testid="stMetricDelta"] {{
+        font-size: 0.8rem !important;
     }}
 
     .stSelectbox label {{
@@ -93,23 +102,38 @@ st.markdown(f"""
 
     div[data-testid="stDataFrame"] {{
         border: 1px solid {BORDER};
-        border-radius: 16px;
+        border-radius: 10px;
         overflow: hidden;
-        box-shadow: 0 2px 8px rgba(16, 32, 51, 0.03);
+    }}
+
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 4px;
+        border-bottom: 2px solid {BORDER};
+    }}
+
+    .stTabs [data-baseweb="tab"] {{
+        font-weight: 700;
+        color: {SUBTEXT_COLOR};
+        padding: 10px 24px;
+    }}
+
+    .stTabs [aria-selected="true"] {{
+        color: {LPL_NAVY} !important;
+        border-bottom: 3px solid {LPL_ORANGE};
     }}
 
     .section-shell {{
-        background: {SECTION_BG};
+        background: {CARD_BG};
         border: 1px solid {BORDER};
-        border-radius: 18px;
-        padding: 16px 18px;
-        margin-top: 0.45rem;
+        border-radius: 10px;
+        border-top: 3px solid {LPL_NAVY};
+        padding: 14px 18px;
+        margin-top: 1.4rem;
         margin-bottom: 1rem;
-        box-shadow: 0 3px 12px rgba(16, 32, 51, 0.04);
     }}
 
     .section-title {{
-        color: {TEXT_COLOR};
+        color: {LPL_NAVY};
         font-weight: 800;
         font-size: 1.05rem;
         margin-bottom: 0.18rem;
@@ -122,14 +146,70 @@ st.markdown(f"""
     }}
 
     .note-box {{
-        background: #F8FBFE;
+        background: {CARD_BG};
         border: 1px solid {BORDER};
-        border-radius: 14px;
+        border-left: 4px solid {LPL_ORANGE};
+        border-radius: 8px;
         padding: 12px 14px;
         margin-top: 0.25rem;
         margin-bottom: 1rem;
         color: {SUBTEXT_COLOR};
-        font-size: 0.92rem;
+        font-size: 0.9rem;
+        line-height: 1.5;
+    }}
+
+    .slide-band {{
+        background: {LPL_NAVY};
+        border-radius: 10px 10px 0 0;
+        padding: 18px 26px 14px 26px;
+        margin-top: 0.4rem;
+    }}
+
+    .slide-band h2 {{
+        color: #FFFFFF !important;
+        font-size: 1.5rem;
+        font-weight: 800;
+        margin: 0;
+        letter-spacing: -0.02em;
+    }}
+
+    .slide-band p {{
+        color: #C3D0E4 !important;
+        font-size: 0.9rem;
+        margin: 4px 0 0 0;
+    }}
+
+    .slide-rule {{
+        height: 4px;
+        background: {LPL_ORANGE};
+        border-radius: 0 0 2px 2px;
+        margin-bottom: 1.2rem;
+    }}
+
+    .group-label {{
+        color: {SUBTEXT_COLOR};
+        font-weight: 700;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 1.1rem 0 0.6rem 0;
+        padding-bottom: 5px;
+        border-bottom: 1px solid {BORDER};
+    }}
+
+    .chart-cap {{
+        color: {LPL_NAVY};
+        font-weight: 700;
+        font-size: 1rem;
+        margin: 0.2rem 0 0.4rem 0;
+    }}
+
+    .foot-note {{
+        color: {SUBTEXT_COLOR};
+        font-size: 0.82rem;
+        margin-top: 2rem;
+        padding-top: 0.8rem;
+        border-top: 1px solid {BORDER};
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -139,24 +219,23 @@ st.markdown(f"""
 # =========================================
 def section_header(title: str, subtitle: str = ""):
     st.markdown(
-        f"""
-        <div class="section-shell">
-            <div class="section-title">{title}</div>
-            <div class="section-subtitle">{subtitle}</div>
-        </div>
-        """,
+        f'<div class="section-shell"><div class="section-title">{title}</div>'
+        f'<div class="section-subtitle">{subtitle}</div></div>',
         unsafe_allow_html=True
     )
 
 def note_box(text: str):
     st.markdown(f'<div class="note-box">{text}</div>', unsafe_allow_html=True)
 
+def group_label(text: str):
+    st.markdown(f'<div class="group-label">{text}</div>', unsafe_allow_html=True)
+
 def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip().replace("\n", " ").replace("\r", "").replace("\xa0", " ") for c in df.columns]
     return df
 
-def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
+def pick_col(df: pd.DataFrame, options: list, required: bool = True):
     lookup = {str(c).strip().lower(): c for c in df.columns}
     for opt in options:
         if opt.lower() in lookup:
@@ -167,10 +246,8 @@ def pick_col(df: pd.DataFrame, options: list[str], required: bool = True):
 
 def normalize_yes_no(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip().str.lower()
-    mapping = {
-        "yes": "Yes", "y": "Yes", "true": "Yes", "1": "Yes",
-        "no": "No", "n": "No", "false": "No", "0": "No",
-    }
+    mapping = {"yes": "Yes", "y": "Yes", "true": "Yes", "1": "Yes",
+               "no": "No", "n": "No", "false": "No", "0": "No"}
     return s.map(mapping).fillna(series.astype(str).str.strip())
 
 def normalize_percentage(series: pd.Series) -> pd.Series:
@@ -179,16 +256,24 @@ def normalize_percentage(series: pd.Series) -> pd.Series:
         s = s * 100
     return s
 
-def pct_text(num: int, den: int) -> str:
-    if den == 0:
-        return "0.0%"
-    return f"{(num / den) * 100:.1f}%"
-
 def avg_safe(series: pd.Series, decimals: int = 1) -> float:
     s = pd.to_numeric(series, errors="coerce")
     if s.dropna().empty:
         return 0.0
     return round(float(s.mean()), decimals)
+
+def rate(df: pd.DataFrame, col: str):
+    """Percent of Yes in a live-data column. None when there are no rows."""
+    n = len(df)
+    if n == 0:
+        return None
+    return round((df[col] == "Yes").sum() / n * 100, 1)
+
+def fmt_pct(v):
+    return "N/A" if v is None or pd.isna(v) else f"{v:.1f}%"
+
+def fmt_score(v):
+    return "N/A" if v is None or pd.isna(v) else f"{v:.1f}"
 
 def apply_layout(fig, height=360, show_legend=True):
     fig.update_layout(
@@ -196,106 +281,57 @@ def apply_layout(fig, height=360, show_legend=True):
         margin=dict(l=18, r=18, t=52, b=18),
         plot_bgcolor="white",
         paper_bgcolor="white",
-        font=dict(color=TEXT_COLOR, size=13),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(color=TEXT_COLOR, size=12),
-            title=None
-        ),
+        font=dict(color=TEXT_COLOR, size=13, family="Segoe UI, Inter, sans-serif"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(color=TEXT_COLOR, size=12), title=None),
         showlegend=show_legend
     )
-    fig.update_xaxes(
-        title_font=dict(color=TEXT_COLOR, size=13),
-        tickfont=dict(color=TEXT_COLOR),
-        gridcolor="#E6EDF3",
-        zeroline=False
-    )
-    fig.update_yaxes(
-        title_font=dict(color=TEXT_COLOR, size=13),
-        tickfont=dict(color=TEXT_COLOR),
-        gridcolor="#E6EDF3",
-        zeroline=False
-    )
+    fig.update_xaxes(title_font=dict(color=SUBTEXT_COLOR, size=12),
+                     tickfont=dict(color=TEXT_COLOR), gridcolor=GRID, zeroline=False)
+    fig.update_yaxes(title_font=dict(color=SUBTEXT_COLOR, size=12),
+                     tickfont=dict(color=TEXT_COLOR), gridcolor=GRID, zeroline=False)
     return fig
 
-def month_label(dt_series: pd.Series) -> pd.Series:
-    return dt_series.dt.strftime("%b %Y")
+MONTH_NUM = {"January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
+             "July": 7, "August": 8, "September": 9, "October": 10, "November": 11, "December": 12}
+MONTH_ABBR = {v: k[:3] for k, v in MONTH_NUM.items()}
 
-# --- CHANGED ---
-# Was: dt_series.dt.to_period("Q").astype(str)  -> produced "2026Q2" / "2026Q3",
-# which did not match the hardcoded "Q1" label coming from the benchmark file.
-# Now emits clean "Q1" / "Q2" / "Q3" / "Q4" labels that line up with Q1.
-def quarter_label(dt_series: pd.Series) -> pd.Series:
-    q = dt_series.dt.quarter
-    return q.apply(lambda x: f"Q{int(x)}" if pd.notna(x) else pd.NA)
-
-# Sort key stays year-aware so quarters order correctly across years.
-def quarter_sort(dt_series: pd.Series) -> pd.Series:
-    return dt_series.dt.to_period("Q").astype(str)
-
-MONTH_NUM = {
-    "January": 1, "February": 2, "March": 3,
-    "April": 4, "May": 5, "June": 6,
-    "July": 7, "August": 8, "September": 9,
-    "October": 10, "November": 11, "December": 12
-}
-
-MONTH_FIXES = {
-    "janruary": "January",
-    "janaury": "January",
-    "january": "January",
-    "janurary": "January",
-    "januarry": "January",
-    "febuary": "February",
-    "februrary": "February",
-    "marhc": "March",
-    "aplir": "April",
-    "agust": "August",
-    "ocotber": "October",
-    "novemeber": "November",
-    "decemeber": "December",
-}
+MONTH_FIXES = {"janruary": "January", "janaury": "January", "january": "January",
+               "janurary": "January", "januarry": "January", "febuary": "February",
+               "februrary": "February", "marhc": "March", "aplir": "April",
+               "agust": "August", "ocotber": "October", "novemeber": "November",
+               "decemeber": "December"}
 
 def normalize_month_name(value: str) -> str:
     s = str(value).strip()
     if not s:
         return s
-    s_lower = s.lower()
-    if s_lower in MONTH_FIXES:
-        return MONTH_FIXES[s_lower]
-    s_title = s.title()
-    if s_title in MONTH_NUM:
-        return s_title
-    return s_title
+    if s.lower() in MONTH_FIXES:
+        return MONTH_FIXES[s.lower()]
+    return s.title()
 
-def view_avg(df: pd.DataFrame, score_col: str, individual_view: bool) -> float:
+def view_avg(df: pd.DataFrame, score_col: str) -> float:
+    """Average of each associate's own average, so associates weigh equally.
+
+    With a single associate selected this reduces to that person's plain mean,
+    so no separate individual code path is needed.
+    """
     if df.empty:
         return 0.0
-    if individual_view:
-        return avg_safe(df[score_col])
-    employee_avg = (
-        df.groupby("AssociateName", as_index=False)[score_col]
-        .mean()[score_col]
-    )
-    return round(float(employee_avg.mean()), 1) if not employee_avg.empty else 0.0
+    e = df.groupby("AssociateName", as_index=False)[score_col].mean()[score_col]
+    return round(float(e.mean()), 1) if not e.empty else 0.0
 
 # =========================================
-# LOAD CURRENT CALL DATA
+# LOAD DATA
 # =========================================
 @st.cache_data
 def load_call_data() -> pd.DataFrame:
-    df = pd.read_excel(CALL_FILE, sheet_name="Raw_Data")
-    df = clean_cols(df)
-    df = df.dropna(how="all")
+    df = clean_cols(pd.read_excel(CALL_FILE, sheet_name="Raw_Data")).dropna(how="all")
 
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
     team = pick_col(df, ["ManagerTeam", "Manager Team"])
     date = pick_col(df, ["DateOfCall", "Date Of Call"])
-    fcr = pick_col(df, ["IssueResolvedFirstContact", "Issue Resolved First Contact"])
+    res = pick_col(df, ["IssueResolvedFirstContact", "Issue Resolved First Contact"])
     failed = pick_col(df, ["CallFailed", "Call Failed"])
     total = pick_col(df, ["TotalScore", "Total Score"])
     pct = pick_col(df, ["Percentage"], required=False)
@@ -304,32 +340,22 @@ def load_call_data() -> pd.DataFrame:
         "AssociateName": df[assoc].astype(str).str.strip(),
         "ManagerTeam": df[team].astype(str).str.strip(),
         "DateOfCall": pd.to_datetime(df[date], errors="coerce"),
-        "IssueResolvedFirstContact": normalize_yes_no(df[fcr]),
+        "IssueResolvedFirstContact": normalize_yes_no(df[res]),
         "CallFailed": normalize_yes_no(df[failed]),
         "TotalScore": pd.to_numeric(df[total], errors="coerce"),
     })
-
-    if pct:
-        out["Percentage"] = normalize_percentage(df[pct])
-    else:
-        out["Percentage"] = out["TotalScore"]
-
+    out["Percentage"] = normalize_percentage(df[pct]) if pct else out["TotalScore"]
     out = out.dropna(subset=["AssociateName", "ManagerTeam", "DateOfCall"], how="all")
-    out["MonthLabel"] = month_label(out["DateOfCall"])
-    out["QuarterLabel"] = quarter_label(out["DateOfCall"])      # <-- now "Q2" / "Q3"
+
+    out["MonthLabel"] = out["DateOfCall"].dt.strftime("%b %Y")
     out["MonthSort"] = out["DateOfCall"].dt.to_period("M").astype(str)
-    out["QuarterSort"] = quarter_sort(out["DateOfCall"])        # <-- "2026Q2" (sort only)
-    out["MonthNum"] = out["DateOfCall"].dt.month
+    out["QuarterLabel"] = out["DateOfCall"].dt.quarter.apply(lambda x: f"Q{int(x)}" if pd.notna(x) else pd.NA)
+    out["QuarterSort"] = out["DateOfCall"].dt.to_period("Q").astype(str)
     return out
 
-# =========================================
-# LOAD Q1 CALL-LEVEL DATA
-# =========================================
 @st.cache_data
 def load_q1_data() -> pd.DataFrame:
-    df = pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data")
-    df = clean_cols(df)
-    df = df.dropna(how="all")
+    df = clean_cols(pd.read_excel(BENCH_FILE, sheet_name="Benchmark_Data")).dropna(how="all")
 
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
     team = pick_col(df, ["ManagerTeam", "Manager Team"])
@@ -343,25 +369,18 @@ def load_q1_data() -> pd.DataFrame:
         "Q1Month": df[month].astype(str).apply(normalize_month_name),
         "Q1Quarter": df[quarter].astype(str).str.strip(),
         "Score": pd.to_numeric(df[score], errors="coerce"),
-    })
+    }).dropna(subset=["AssociateName", "ManagerTeam", "Q1Month", "Score"], how="any")
 
-    out = out.dropna(subset=["AssociateName", "ManagerTeam", "Q1Month", "Score"], how="any")
-
-    out["Q1Quarter"] = out["Q1Quarter"].replace({
-        "1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4",
-        1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"
-    })
-
+    out["Q1Quarter"] = out["Q1Quarter"].replace(
+        {"1": "Q1", "2": "Q2", "3": "Q3", "4": "Q4", 1: "Q1", 2: "Q2", 3: "Q3", 4: "Q4"})
     out["Q1MonthNum"] = out["Q1Month"].map(MONTH_NUM)
     out = out.dropna(subset=["Q1MonthNum"]).copy()
     out["Q1MonthNum"] = out["Q1MonthNum"].astype(int)
+    out["Q1MonthLabel"] = out["Q1MonthNum"].map(lambda n: f"{MONTH_ABBR[n]} {Q1_YEAR}")
     return out
 
-# =========================================
-# DATA INIT
-# =========================================
 st.title("MAS Dashboard")
-st.caption("Managed Accounts Service metrics, Q1 comparison, and live grading insights")
+st.caption("Managed Accounts Service call grading, year to date")
 
 try:
     call_df = load_call_data()
@@ -375,32 +394,20 @@ except Exception as e:
     st.error(f"Could not load Q1 data: {e}")
     q1_df = pd.DataFrame()
 
-# =========================================
-# TOP DISCLAIMER
-# =========================================
 note_box(
-    "Q1 metrics are considered the benchmark and are based on January through March scored call records. "
-    "Q1 records are score-only and do not include call dates. "
-    "Q2 (April 1 through June 30, 2026) is final. Q3 is in progress. "
-    "Call Failed Rate and First Call Resolution Rate are calculated using April 1, 2026 forward live grading data only."
+    "Q1 covers January through March scored call records. Those records are score-only and "
+    "carry no call dates, so First Call Resolution Rate and Call Failed Rate begin at "
+    "April 1, 2026 and are never reported for Q1. "
+    "Q2 (April through June) is final. Q3 is in progress and currently holds July scores."
 )
 
 # =========================================
-# FILTERS
+# VIEW SCOPE (applies to both tabs)
 # =========================================
-section_header(
-    "Dashboard Filters",
-    "Use team, employee, and current-period filters to compare Q1 performance against April-forward live grading."
-)
+w1, w2 = st.columns([1, 1])
 
-f1, f2, f3 = st.columns([1, 1, 1])
-
-with f1:
-    view_by = st.selectbox(
-        "View By",
-        ["All Teams", "Katie", "Charles", "Individual Associate"],
-        index=0
-    )
+with w1:
+    view_by = st.selectbox("View By", ["All Teams", "Katie", "Charles", "Individual Associate"], index=0)
 
 all_associates = sorted(
     pd.concat([
@@ -410,425 +417,389 @@ all_associates = sorted(
 )
 
 selected_associate = None
-with f2:
+with w2:
     if view_by == "Individual Associate":
-        selected_associate = st.selectbox("Associate Name", all_associates)
+        selected_associate = st.selectbox("Associate", all_associates)
 
-# --- CHANGED ---
-# Quarter options are built from whatever quarters actually exist in the call file.
-# Q4 will appear on its own in October; Q1 2027 on its own in January. No code edit ever.
-# The newest quarter is labeled "Current Quarter"; every closed quarter is labeled "Final".
-quarter_options = []
-quarter_lookup = {}
-if not call_df.empty:
-    q_sorted = (
-        call_df[["QuarterLabel", "QuarterSort"]]
-        .dropna()
-        .drop_duplicates()
-        .sort_values("QuarterSort")
-    )
-    q_labels = q_sorted["QuarterLabel"].tolist()
-    for i, q in enumerate(q_labels):
-        suffix = "Current Quarter" if i == len(q_labels) - 1 else "Final"
-        opt = f"{q} ({suffix})"
-        quarter_options.append(opt)
-        quarter_lookup[opt] = q
+def by_team(df):
+    if df.empty:
+        return df
+    if view_by in ["Katie", "Charles"]:
+        return df[df["ManagerTeam"] == view_by]
+    if view_by == "Individual Associate" and selected_associate:
+        return df[df["AssociateName"] == selected_associate]
+    return df
 
-# Change index=0 to index=1 if you want the dashboard to open on the first quarter
-# in the list (Q2 today) instead of blended "All Current Data".
-with f3:
-    time_view = st.selectbox(
-        "Current Data View",
-        ["All Current Data"] + quarter_options + ["Current Month", "Specific Month"],
-        index=0
-    )
-
-selected_month = None
-if not call_df.empty and time_view == "Specific Month":
-    month_options = sorted(
-        call_df["MonthLabel"].dropna().unique().tolist(),
-        key=lambda x: pd.to_datetime(x, format="%b %Y")
-    )
-    selected_month = st.selectbox("Select Current Month", month_options)
+call_scope = by_team(call_df)
+q1_scope = by_team(q1_df)
+individual_view = view_by == "Individual Associate"  # display only, not a math switch
 
 # =========================================
-# FILTER DATA
+# QUARTER TABLE + YEAR TO DATE TOTALS
 # =========================================
-call_filtered = call_df.copy()
-q1_filtered = q1_df.copy()
+def build_quarters() -> pd.DataFrame:
+    rows = []
 
-# --- CHANGED --- quarter-aware period filtering, driven by the dynamic lookup above
-if not call_filtered.empty:
-    if time_view in quarter_lookup:
-        call_filtered = call_filtered[call_filtered["QuarterLabel"] == quarter_lookup[time_view]]
-    elif time_view == "Current Month":
-        latest_month = sorted(call_filtered["MonthSort"].dropna().unique().tolist())[-1]
-        call_filtered = call_filtered[call_filtered["MonthSort"] == latest_month]
-    elif time_view == "Specific Month" and selected_month:
-        call_filtered = call_filtered[call_filtered["MonthLabel"] == selected_month]
-
-if view_by in ["Katie", "Charles"]:
-    call_filtered = call_filtered[call_filtered["ManagerTeam"] == view_by]
-    q1_filtered = q1_filtered[q1_filtered["ManagerTeam"] == view_by]
-elif view_by == "Individual Associate" and selected_associate:
-    call_filtered = call_filtered[call_filtered["AssociateName"] == selected_associate]
-    q1_filtered = q1_filtered[q1_filtered["AssociateName"] == selected_associate]
-
-call_selected_full = call_df.copy()
-q1_selected_full = q1_df.copy()
-
-if view_by in ["Katie", "Charles"]:
-    call_selected_full = call_selected_full[call_selected_full["ManagerTeam"] == view_by]
-    q1_selected_full = q1_selected_full[q1_selected_full["ManagerTeam"] == view_by]
-elif view_by == "Individual Associate" and selected_associate:
-    call_selected_full = call_selected_full[call_selected_full["AssociateName"] == selected_associate]
-    q1_selected_full = q1_selected_full[q1_selected_full["AssociateName"] == selected_associate]
-
-individual_view = view_by == "Individual Associate"
-
-# =========================================
-# OVERVIEW
-# =========================================
-section_header(
-    "Performance Overview",
-    "Q1 and current performance metrics for the selected view."
-)
-
-q1_calls = len(q1_filtered)
-q1_total_score = pd.to_numeric(q1_filtered["Score"], errors="coerce").sum()
-q1_avg = view_avg(q1_filtered, "Score", individual_view)
-
-current_calls = len(call_filtered)
-current_total_score = pd.to_numeric(call_filtered["TotalScore"], errors="coerce").sum()
-current_avg = view_avg(call_filtered, "TotalScore", individual_view)
-
-failed_rate = pct_text((call_filtered["CallFailed"] == "Yes").sum(), current_calls)
-fcr_rate = pct_text((call_filtered["IssueResolvedFirstContact"] == "Yes").sum(), current_calls)
-
-ytd_calls = q1_calls + current_calls
-
-if individual_view:
-    ytd_avg = round(((q1_total_score + current_total_score) / ytd_calls), 1) if ytd_calls > 0 else 0.0
-else:
-    q1_emp = (
-        q1_filtered.groupby("AssociateName", as_index=False)
-        .agg(Q1Score=("Score", "sum"), Q1Calls=("Score", "size"))
-    ) if not q1_filtered.empty else pd.DataFrame(columns=["AssociateName", "Q1Score", "Q1Calls"])
-
-    current_emp = (
-        call_filtered.groupby("AssociateName", as_index=False)
-        .agg(CurrentScore=("TotalScore", "sum"), CurrentCalls=("TotalScore", "size"))
-    ) if not call_filtered.empty else pd.DataFrame(columns=["AssociateName", "CurrentScore", "CurrentCalls"])
-
-    ytd_emp = q1_emp.merge(current_emp, on="AssociateName", how="outer").fillna(0)
-    if not ytd_emp.empty:
-        ytd_emp["YTDCalls"] = ytd_emp["Q1Calls"] + ytd_emp["CurrentCalls"]
-        ytd_emp["YTDScore"] = ytd_emp["Q1Score"] + ytd_emp["CurrentScore"]
-        ytd_emp["YTDAvg"] = ytd_emp.apply(
-            lambda r: (r["YTDScore"] / r["YTDCalls"]) if r["YTDCalls"] > 0 else pd.NA,
-            axis=1
-        )
-        ytd_avg = round(pd.to_numeric(ytd_emp["YTDAvg"], errors="coerce").dropna().mean(), 1) if not ytd_emp["YTDAvg"].dropna().empty else 0.0
-    else:
-        ytd_avg = 0.0
-
-delta_vs_q1 = round(current_avg - q1_avg, 1) if q1_calls > 0 and current_calls > 0 else 0.0
-
-m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Q1 Calls", q1_calls)
-m2.metric("Q1 Avg", q1_avg)
-m3.metric("Current Calls", current_calls)
-m4.metric("Current Avg", current_avg)
-m5.metric("Call Failed Rate", failed_rate)
-m6.metric("First Call Resolution Rate", fcr_rate)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-d1, d2, d3 = st.columns(3)
-d1.metric("YTD Calls", ytd_calls)
-d2.metric("YTD Avg", ytd_avg)
-d3.metric("Current vs Q1", f"{delta_vs_q1:+.1f}")
-
-# =========================================
-# MONTH-TO-MONTH COMPARISON
-# =========================================
-section_header(
-    "Month-to-Month Comparison",
-    "Q1 months are compared to April-forward live grading months for the selected view."
-)
-
-q1_monthly = pd.DataFrame()
-if not q1_selected_full.empty:
-    q1_month_emp = (
-        q1_selected_full.groupby(["Q1Month", "Q1MonthNum", "AssociateName"], as_index=False)
-        .agg(EmployeeAvg=("Score", "mean"))
-    )
-    q1_month_calls = (
-        q1_selected_full.groupby(["Q1Month", "Q1MonthNum"], as_index=False)
-        .agg(CallCount=("Score", "size"))
-    )
-    q1_month_avg = (
-        q1_month_emp.groupby(["Q1Month", "Q1MonthNum"], as_index=False)
-        .agg(AvgScore=("EmployeeAvg", "mean"))
-    )
-    q1_monthly = q1_month_avg.merge(q1_month_calls, on=["Q1Month", "Q1MonthNum"], how="left")
-    q1_monthly["PeriodLabel"] = q1_monthly["Q1Month"]
-    q1_monthly["PeriodSort"] = q1_monthly["Q1MonthNum"]
-    q1_monthly["Source"] = "Q1"
-
-current_monthly = pd.DataFrame()
-if not call_selected_full.empty:
-    current_month_emp = (
-        call_selected_full.groupby(["MonthLabel", "MonthSort", "MonthNum", "AssociateName"], as_index=False)
-        .agg(EmployeeAvg=("TotalScore", "mean"))
-    )
-    current_month_calls = (
-        call_selected_full.groupby(["MonthLabel", "MonthSort", "MonthNum"], as_index=False)
-        .agg(CallCount=("TotalScore", "size"))
-    )
-    current_month_avg = (
-        current_month_emp.groupby(["MonthLabel", "MonthSort", "MonthNum"], as_index=False)
-        .agg(AvgScore=("EmployeeAvg", "mean"))
-    )
-    current_monthly = current_month_avg.merge(
-        current_month_calls, on=["MonthLabel", "MonthSort", "MonthNum"], how="left"
-    )
-    current_monthly["PeriodLabel"] = current_monthly["MonthLabel"]
-    current_monthly["PeriodSort"] = current_monthly["MonthNum"]
-    current_monthly["Source"] = "Current"
-
-monthly_compare = pd.concat(
-    [
-        q1_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not q1_monthly.empty else pd.DataFrame(),
-        current_monthly[["PeriodLabel", "PeriodSort", "AvgScore", "CallCount", "Source"]] if not current_monthly.empty else pd.DataFrame()
-    ],
-    ignore_index=True
-)
-
-if not monthly_compare.empty:
-    monthly_compare = monthly_compare.sort_values("PeriodSort").reset_index(drop=True)
-    monthly_compare["BarLabel"] = monthly_compare.apply(
-        lambda r: f"{r['AvgScore']:.1f}<br>{int(r['CallCount'])} calls",
-        axis=1
-    )
-
-    fig_month = px.bar(
-        monthly_compare,
-        x="PeriodLabel",
-        y="AvgScore",
-        color="Source",
-        text="BarLabel",
-        barmode="group",
-        title="Average Score by Month"
-    )
-    fig_month.update_traces(textposition="outside")
-    fig_month = apply_layout(fig_month, height=360, show_legend=True)
-    fig_month.update_xaxes(title="")
-    fig_month.update_yaxes(title="Avg Score")
-    st.plotly_chart(fig_month, use_container_width=True)
-else:
-    st.info("No monthly comparison data available for the selected view.")
-
-# =========================================
-# QUARTER COMPARISON
-# =========================================
-section_header(
-    "Quarter Comparison",
-    "Q1 benchmark against finalized Q2 and the in-progress current quarter. Bar labels show quarter-over-quarter movement."
-)
-
-quarter_compare_rows = []
-
-if not q1_selected_full.empty:
-    if individual_view:
-        q1_quarter_avg = avg_safe(q1_selected_full["Score"])
-    else:
-        q1_quarter_emp = (
-            q1_selected_full.groupby("AssociateName", as_index=False)
-            .agg(EmployeeAvg=("Score", "mean"))
-        )
-        q1_quarter_avg = round(q1_quarter_emp["EmployeeAvg"].mean(), 1) if not q1_quarter_emp.empty else 0.0
-
-    quarter_compare_rows.append({
-        "Quarter": "Q1",
-        "QuarterSort": "2026Q1",
-        "AvgScore": float(q1_quarter_avg),
-        "CallCount": int(len(q1_selected_full))
-    })
-
-if not call_selected_full.empty:
-    current_quarter_emp = (
-        call_selected_full.groupby(["QuarterLabel", "QuarterSort", "AssociateName"], as_index=False)
-        .agg(EmployeeAvg=("TotalScore", "mean"))
-    )
-    current_quarter_calls = (
-        call_selected_full.groupby(["QuarterLabel", "QuarterSort"], as_index=False)
-        .agg(CallCount=("TotalScore", "size"))
-    )
-    current_quarter_avg = (
-        current_quarter_emp.groupby(["QuarterLabel", "QuarterSort"], as_index=False)
-        .agg(AvgScore=("EmployeeAvg", "mean"))
-    ).merge(current_quarter_calls, on=["QuarterLabel", "QuarterSort"], how="left").sort_values("QuarterSort")
-
-    for _, row in current_quarter_avg.iterrows():
-        quarter_compare_rows.append({
-            "Quarter": row["QuarterLabel"],
-            "QuarterSort": row["QuarterSort"],
-            "AvgScore": float(row["AvgScore"]),
-            "CallCount": int(row["CallCount"])
+    if not q1_scope.empty:
+        rows.append({
+            "Quarter": "Q1", "Sort": f"{Q1_YEAR}Q1", "Status": "Score only",
+            "Calls": int(len(q1_scope)),
+            "Quality": view_avg(q1_scope, "Score"),
+            "Resolution": None, "Failed": None,
         })
 
-quarter_compare_df = pd.DataFrame(quarter_compare_rows)
+    if not call_scope.empty:
+        live_qs = sorted(call_scope["QuarterSort"].dropna().unique().tolist())
+        newest = live_qs[-1] if live_qs else None
+        for qsort in live_qs:
+            g = call_scope[call_scope["QuarterSort"] == qsort]
+            rows.append({
+                "Quarter": g["QuarterLabel"].iloc[0], "Sort": qsort,
+                "Status": "In Progress" if qsort == newest else "Final",
+                "Calls": int(len(g)),
+                "Quality": view_avg(g, "TotalScore"),
+                "Resolution": rate(g, "IssueResolvedFirstContact"),
+                "Failed": rate(g, "CallFailed"),
+            })
 
-if not quarter_compare_df.empty:
-    quarter_compare_df = quarter_compare_df.sort_values("QuarterSort").reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values("Sort").reset_index(drop=True) if rows else pd.DataFrame()
 
-    # --- NEW --- quarter-over-quarter delta
-    quarter_compare_df["QoQ"] = quarter_compare_df["AvgScore"].diff().round(1)
+quarters = build_quarters()
 
-    # Latest quarter is still open; flag it so nobody reads a partial quarter as final.
-    latest_quarter = quarter_compare_df["Quarter"].iloc[-1]
-    quarter_compare_df["Status"] = quarter_compare_df["Quarter"].apply(
-        lambda q: "In Progress" if q == latest_quarter else "Final"
-    )
+def combined_quality(q1_part: pd.DataFrame, live_part: pd.DataFrame) -> float:
+    """Quality across Q1 and live data: average of each associate's own average."""
+    if len(q1_part) + len(live_part) == 0:
+        return 0.0
 
-    def _bar_label(r):
-        base = f"{r['AvgScore']:.1f}<br>{int(r['CallCount'])} calls"
-        if pd.notna(r["QoQ"]):
-            base += f"<br>{r['QoQ']:+.1f} QoQ"
-        return base
+    a = q1_part.groupby("AssociateName", as_index=False).agg(S=("Score", "sum"), N=("Score", "size")) \
+        if not q1_part.empty else pd.DataFrame(columns=["AssociateName", "S", "N"])
+    b = live_part.groupby("AssociateName", as_index=False).agg(S2=("TotalScore", "sum"), N2=("TotalScore", "size")) \
+        if not live_part.empty else pd.DataFrame(columns=["AssociateName", "S2", "N2"])
+    m = a.merge(b, on="AssociateName", how="outer").fillna(0)
+    if m.empty:
+        return 0.0
+    m["N_all"] = m["N"] + m["N2"]
+    m["S_all"] = m["S"] + m["S2"]
+    vals = pd.to_numeric(
+        m.apply(lambda r: r["S_all"] / r["N_all"] if r["N_all"] > 0 else pd.NA, axis=1),
+        errors="coerce"
+    ).dropna()
+    return round(vals.mean(), 1) if not vals.empty else 0.0
 
-    quarter_compare_df["BarLabel"] = quarter_compare_df.apply(_bar_label, axis=1)
+ytd_calls = len(q1_scope) + len(call_scope)
+ytd_quality = combined_quality(q1_scope, call_scope)
+ytd_resolution = rate(call_scope, "IssueResolvedFirstContact")
+ytd_failed = rate(call_scope, "CallFailed")
 
-    fig_quarter = px.bar(
-        quarter_compare_df,
-        x="Quarter",
-        y="AvgScore",
-        text="BarLabel",
-        color="Status",
-        color_discrete_map={"Final": PRIMARY, "In Progress": SLATE},
-        title="Average Score by Quarter"
-    )
-    fig_quarter.update_traces(textposition="outside")
-    fig_quarter = apply_layout(fig_quarter, height=330, show_legend=True)
-    fig_quarter.update_xaxes(title="", categoryorder="array", categoryarray=quarter_compare_df["Quarter"].tolist())
-    fig_quarter.update_yaxes(title="Avg Score")
-    st.plotly_chart(fig_quarter, use_container_width=True)
-else:
-    st.info("No quarter comparison data available for the selected view.")
+def build_ranking(q1_part: pd.DataFrame, live_part: pd.DataFrame) -> pd.DataFrame:
+    """Rank across every associate in the period, so a filtered view still
+    shows a true standing rather than everyone starting at rank 1."""
+    a = q1_part.groupby(["ManagerTeam", "AssociateName"], as_index=False).agg(S=("Score", "sum"), N=("Score", "size")) \
+        if not q1_part.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "S", "N"])
+    b = live_part.groupby(["ManagerTeam", "AssociateName"], as_index=False).agg(S2=("TotalScore", "sum"), N2=("TotalScore", "size")) \
+        if not live_part.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "S2", "N2"])
+    rk = a.merge(b, on=["ManagerTeam", "AssociateName"], how="outer").fillna(0)
+    if rk.empty:
+        return rk
+    rk["Calls"] = (rk["N"] + rk["N2"]).astype(int)
+    rk = rk[rk["Calls"] > 0].copy()
+    if rk.empty:
+        return rk
+    rk["Quality"] = rk.apply(lambda r: round((r["S"] + r["S2"]) / r["Calls"], 1), axis=1)
+    rk["Rank"] = rk["Quality"].rank(method="dense", ascending=False).astype("Int64")
+    return rk.sort_values(["Rank", "AssociateName"]).reset_index(drop=True)
+
+
+tab_summary, tab_detail = st.tabs(["Summary", "Detail"])
 
 # =========================================
-# RANKING
+# SUMMARY TAB
 # =========================================
-section_header(
-    "YTD Ranking",
-    "Ranks each employee by individual YTD average."
-)
-
-q1_rank = (
-    q1_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
-    .agg(Q1Score=("Score", "sum"), Q1Calls=("Score", "size"))
-) if not q1_selected_full.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "Q1Score", "Q1Calls"])
-
-current_rank = (
-    call_selected_full.groupby(["ManagerTeam", "AssociateName"], as_index=False)
-    .agg(CurrentScore=("TotalScore", "sum"), CurrentCalls=("TotalScore", "size"))
-) if not call_selected_full.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "CurrentScore", "CurrentCalls"])
-
-ranking_df = q1_rank.merge(current_rank, on=["ManagerTeam", "AssociateName"], how="outer").fillna(0)
-
-if not ranking_df.empty:
-    ranking_df["YTDCalls"] = ranking_df["Q1Calls"] + ranking_df["CurrentCalls"]
-    ranking_df["YTDScore"] = ranking_df["Q1Score"] + ranking_df["CurrentScore"]
-    ranking_df["YTDAvg"] = ranking_df.apply(
-        lambda r: (r["YTDScore"] / r["YTDCalls"]) if r["YTDCalls"] > 0 else pd.NA,
-        axis=1
+with tab_summary:
+    scope_label = selected_associate if individual_view and selected_associate else view_by
+    st.markdown(
+        f'<div class="slide-band"><h2>Call Grading Year to Date</h2>'
+        f'<p>Managed Accounts Service &nbsp;|&nbsp; {scope_label} &nbsp;|&nbsp; '
+        f'Q1 through current quarter</p></div><div class="slide-rule"></div>',
+        unsafe_allow_html=True
     )
-    ranking_df["YTDRank"] = ranking_df["YTDAvg"].rank(method="dense", ascending=False).astype("Int64")
-    display_rank = ranking_df.sort_values(["YTDRank", "AssociateName"]).copy()
 
-    if view_by == "All Teams":
-        st.dataframe(
-            display_rank[["ManagerTeam", "AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
-            use_container_width=True,
-            hide_index=True
-        )
+    if quarters.empty:
+        st.info("No call grading data available for this view.")
     else:
-        st.dataframe(
-            display_rank[["AssociateName", "YTDRank"]].rename(columns={"YTDRank": "YTD Rank"}),
-            use_container_width=True,
-            hide_index=True
+        group_label("Year to Date Totals")
+        y1, y2, y3, y4 = st.columns(4)
+        y1.metric("Total Calls Graded", f"{ytd_calls:,}")
+        y2.metric("Average Quality Score", fmt_score(ytd_quality))
+        y3.metric("First Call Resolution Rate", fmt_pct(ytd_resolution))
+        y4.metric("Call Failed Rate", fmt_pct(ytd_failed))
+        st.caption(
+            "First Call Resolution Rate and Call Failed Rate cover April 1, 2026 forward only. "
+            "Average Quality Score covers the full year, including Q1."
         )
-else:
-    st.info("No YTD ranking available for the selected view.")
+
+        group_label("Average Quality Score by Quarter")
+        qcols = st.columns(len(quarters))
+        for i, (_, r) in enumerate(quarters.iterrows()):
+            tag = " (In Progress)" if r["Status"] == "In Progress" else ""
+            qcols[i].metric(
+                f"{r['Quarter']}{tag}",
+                fmt_score(r["Quality"]),
+                f"{int(r['Calls']):,} calls graded",
+                delta_color="off"
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        left, right = st.columns(2)
+
+        with left:
+            st.markdown('<div class="chart-cap">First Call Resolution Rate</div>', unsafe_allow_html=True)
+            res_df = quarters[quarters["Resolution"].notna()].copy()
+            if res_df.empty:
+                st.info("Begins at Q2. Q1 records are score-only.")
+            else:
+                fig = go.Figure(go.Bar(
+                    x=res_df["Quarter"], y=res_df["Resolution"],
+                    marker_color=[STATUS_OPEN if s == "In Progress" else LPL_NAVY for s in res_df["Status"]],
+                    text=[f"{v:.1f}%" for v in res_df["Resolution"]],
+                    textposition="outside", width=0.5,
+                ))
+                fig = apply_layout(fig, height=340, show_legend=False)
+                fig.update_yaxes(title="First Call Resolution Rate", range=[70, 100], ticksuffix="%")
+                fig.update_xaxes(title="")
+                st.plotly_chart(fig, use_container_width=True)
+
+        with right:
+            st.markdown('<div class="chart-cap">Average Quality Score</div>', unsafe_allow_html=True)
+            fig = go.Figure(go.Bar(
+                x=quarters["Quarter"], y=quarters["Quality"],
+                marker_color=[STATUS_OPEN if s == "In Progress" else
+                              (SRC_Q1 if s == "Score only" else LPL_NAVY) for s in quarters["Status"]],
+                text=[f"{v:.1f}" for v in quarters["Quality"]],
+                textposition="outside", width=0.5,
+            ))
+            fig = apply_layout(fig, height=340, show_legend=False)
+            fig.update_yaxes(title="Average Quality Score", range=[70, 100])
+            fig.update_xaxes(title="")
+            st.plotly_chart(fig, use_container_width=True)
+
+        tbl = quarters[["Quarter", "Status", "Calls", "Quality", "Resolution", "Failed"]].copy()
+        tbl = pd.concat([tbl, pd.DataFrame([{
+            "Quarter": "Year to Date", "Status": "All quarters", "Calls": ytd_calls,
+            "Quality": ytd_quality, "Resolution": ytd_resolution, "Failed": ytd_failed,
+        }])], ignore_index=True)
+
+        tbl["Calls"] = tbl["Calls"].map(lambda v: f"{int(v):,}")
+        tbl["Quality"] = tbl["Quality"].map(fmt_score)
+        tbl["Resolution"] = tbl["Resolution"].map(fmt_pct)
+        tbl["Failed"] = tbl["Failed"].map(fmt_pct)
+        tbl.columns = ["Quarter", "Status", "Calls Graded", "Average Quality Score",
+                       "First Call Resolution Rate", "Call Failed Rate"]
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
 
 # =========================================
-# LIVE CURRENT DETAIL
+# DETAIL TAB
 # =========================================
-if view_by != "All Teams":
+with tab_detail:
+    period_options = ["All Year"]
+    period_map = {}
+
+    if not q1_scope.empty:
+        period_options.append("Q1")
+        period_map["Q1"] = ("q1_quarter", None)
+    if not call_scope.empty:
+        for q in sorted(call_scope["QuarterSort"].dropna().unique().tolist()):
+            lab = call_scope[call_scope["QuarterSort"] == q]["QuarterLabel"].iloc[0]
+            period_options.append(lab)
+            period_map[lab] = ("live_quarter", q)
+    if not q1_scope.empty:
+        for _, r in q1_scope[["Q1MonthLabel", "Q1Month", "Q1MonthNum"]].drop_duplicates().sort_values("Q1MonthNum").iterrows():
+            period_options.append(r["Q1MonthLabel"])
+            period_map[r["Q1MonthLabel"]] = ("q1_month", r["Q1Month"])
+    if not call_scope.empty:
+        for _, r in call_scope[["MonthLabel", "MonthSort"]].drop_duplicates().sort_values("MonthSort").iterrows():
+            period_options.append(r["MonthLabel"])
+            period_map[r["MonthLabel"]] = ("live_month", r["MonthLabel"])
+
+    period = st.selectbox("Period", period_options, index=0)
+    kind, val = period_map.get(period, (None, None))
+
+    def slice_period(q1_src, live_src):
+        e_q1, e_lv = q1_src.iloc[0:0], live_src.iloc[0:0]
+        if kind is None:
+            return q1_src, live_src
+        if kind == "q1_quarter":
+            return q1_src, e_lv
+        if kind == "q1_month":
+            return q1_src[q1_src["Q1Month"] == val], e_lv
+        if kind == "live_quarter":
+            return e_q1, live_src[live_src["QuarterSort"] == val]
+        return e_q1, live_src[live_src["MonthLabel"] == val]
+
+    # Scoped to the current View By, for tiles and the detail tables
+    q1_period, call_period = slice_period(q1_scope, call_scope)
+    # Whole population, so ranks are true standings rather than rank 1 of 1
+    q1_all_period, call_all_period = slice_period(q1_df, call_df)
+
+    has_q1 = not q1_period.empty
+    has_live = not call_period.empty
+    plabel = "Year to Date" if kind is None else period
+
+    # ---------------- Overview ----------------
     section_header(
-        "Current Graded Call Detail",
-        "April 1, 2026 forward on any graded call."
+        f"{plabel} Overview",
+        "Every figure below reflects the selected period. Year to date totals are shown alongside for reference."
     )
 
-    if call_filtered.empty:
-        st.info("No current graded call detail available for the selected filters.")
-    else:
-        current_detail = call_filtered[[
-            "AssociateName",
-            "ManagerTeam",
-            "DateOfCall",
-            "TotalScore",
-            "Percentage",
-            "CallFailed",
-            "IssueResolvedFirstContact"
-        ]].copy()
+    p_calls = len(q1_period) + len(call_period)
+    p_quality = combined_quality(q1_period, call_period)
+    p_resolution = rate(call_period, "IssueResolvedFirstContact")
+    p_failed = rate(call_period, "CallFailed")
 
-        current_detail = current_detail.sort_values("DateOfCall", ascending=False)
-        current_detail["DateOfCall"] = pd.to_datetime(current_detail["DateOfCall"], errors="coerce").dt.strftime("%m/%d/%Y")
-        current_detail["Percentage"] = current_detail["Percentage"].round(1)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Calls Graded", f"{p_calls:,}")
+    m2.metric("Average Quality Score", fmt_score(p_quality))
+    m3.metric("First Call Resolution Rate", fmt_pct(p_resolution))
+    m4.metric("Call Failed Rate", fmt_pct(p_failed))
 
-        st.dataframe(
-            current_detail,
-            use_container_width=True,
-            hide_index=True
+    if has_q1 and not has_live:
+        st.caption(
+            "Q1 records are score-only, so First Call Resolution Rate and "
+            "Call Failed Rate are not available for this period."
         )
 
-# =========================================
-# Q1 CALL SCORES
-# =========================================
-section_header(
-    "Q1 Call Scores",
-    "January through March call scores are listed by month because historical Q1 records do not include call dates."
+    st.markdown("<br>", unsafe_allow_html=True)
+    group_label("Year to Date, All Periods")
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Total Calls Graded", f"{ytd_calls:,}")
+    d2.metric("Average Quality Score", fmt_score(ytd_quality))
+    d3.metric("First Call Resolution Rate", fmt_pct(ytd_resolution))
+    d4.metric("Call Failed Rate", fmt_pct(ytd_failed))
+
+    # ---------------- Trend charts: only across the whole year ----------------
+    # A single quarter or month renders as one bar, which says nothing the tiles
+    # above have not already said. Quarter-over-quarter lives on the Summary tab.
+    if kind is None:
+        section_header("Average Quality Score by Month",
+                       "January through March scores alongside April-forward live grading months.")
+
+        parts = []
+        if not q1_scope.empty:
+            e = q1_scope.groupby(["Q1MonthNum", "AssociateName"], as_index=False).agg(E=("Score", "mean"))
+            a = e.groupby("Q1MonthNum", as_index=False).agg(Quality=("E", "mean"))
+            c = q1_scope.groupby("Q1MonthNum", as_index=False).agg(Calls=("Score", "size"))
+            d = a.merge(c, on="Q1MonthNum")
+            d["Label"] = d["Q1MonthNum"].map(lambda n: f"{MONTH_ABBR[n]} {Q1_YEAR}")
+            d["Sort"] = d["Q1MonthNum"].map(lambda n: f"{Q1_YEAR}-{n:02d}")
+            d["Source"] = "Q1 (Jan-Mar)"
+            parts.append(d[["Label", "Sort", "Quality", "Calls", "Source"]])
+
+        if not call_scope.empty:
+            e = call_scope.groupby(["MonthSort", "MonthLabel", "AssociateName"], as_index=False).agg(E=("TotalScore", "mean"))
+            a = e.groupby(["MonthSort", "MonthLabel"], as_index=False).agg(Quality=("E", "mean"))
+            c = call_scope.groupby(["MonthSort", "MonthLabel"], as_index=False).agg(Calls=("TotalScore", "size"))
+            d = a.merge(c, on=["MonthSort", "MonthLabel"]).rename(columns={"MonthLabel": "Label", "MonthSort": "Sort"})
+            d["Source"] = "Live Grading"
+            parts.append(d[["Label", "Sort", "Quality", "Calls", "Source"]])
+
+        if parts:
+            monthly = pd.concat(parts, ignore_index=True).sort_values("Sort").reset_index(drop=True)
+            monthly["Quality"] = monthly["Quality"].round(1)
+            fig = px.bar(
+                monthly, x="Label", y="Quality", color="Source",
+                text=monthly.apply(lambda r: f"{r['Quality']:.1f}<br>{int(r['Calls'])} calls", axis=1),
+                barmode="group",
+                color_discrete_map={"Q1 (Jan-Mar)": SRC_Q1, "Live Grading": SRC_LIVE},
+            )
+            fig.update_traces(textposition="outside")
+            fig = apply_layout(fig, height=380)
+            fig.update_xaxes(title="", categoryorder="array", categoryarray=monthly["Label"].tolist())
+            fig.update_yaxes(title="Average Quality Score", range=[0, 105])
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No monthly data available for this view.")
+
+        section_header("Average Quality Score by Quarter",
+                       "Q1 scores, closed quarters, and the quarter in progress.")
+
+        if quarters.empty:
+            st.info("No quarterly data available for this view.")
+        else:
+            fig = px.bar(
+                quarters, x="Quarter", y="Quality", color="Status",
+                text=quarters.apply(lambda r: f"{r['Quality']:.1f}<br>{int(r['Calls'])} calls", axis=1),
+                color_discrete_map={"Score only": SRC_Q1, "Final": STATUS_FINAL, "In Progress": STATUS_OPEN},
+            )
+            fig.update_traces(textposition="outside", width=0.5)
+            fig = apply_layout(fig, height=360)
+            fig.update_xaxes(title="", categoryorder="array", categoryarray=quarters["Quarter"].tolist())
+            fig.update_yaxes(title="Average Quality Score", range=[0, 105])
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ---------------- Ranking: true standing across every associate ----------------
+    section_header(f"{plabel} Ranking",
+                   "Every associate ranked by their own average quality score for this period. "
+                   "Ranks are calculated across the whole department, so a filtered view still "
+                   "shows a true standing.")
+
+    ranking_all = build_ranking(q1_all_period, call_all_period)
+
+    if ranking_all.empty:
+        st.info(f"No graded calls in {plabel}.")
+    else:
+        total_ranked = len(ranking_all)
+
+        if view_by in ["Katie", "Charles"]:
+            shown = ranking_all[ranking_all["ManagerTeam"] == view_by]
+        elif individual_view and selected_associate:
+            shown = ranking_all[ranking_all["AssociateName"] == selected_associate]
+        else:
+            shown = ranking_all
+
+        if shown.empty:
+            st.info(f"No graded calls in {plabel} for this view.")
+        else:
+            cols = ["ManagerTeam", "AssociateName", "Calls", "Quality", "Rank"] if view_by == "All Teams" \
+                else ["AssociateName", "Calls", "Quality", "Rank"]
+            st.dataframe(
+                shown[cols].rename(columns={
+                    "ManagerTeam": "Team", "AssociateName": "Associate",
+                    "Calls": "Calls Graded", "Quality": "Average Quality Score", "Rank": "Rank"}),
+                use_container_width=True, hide_index=True
+            )
+            if individual_view and selected_associate:
+                st.caption(f"Rank {int(shown['Rank'].iloc[0])} of {total_ranked} associates graded in {plabel}.")
+            elif view_by in ["Katie", "Charles"]:
+                st.caption(f"Ranked against all {total_ranked} associates graded in {plabel}.")
+
+    # ---------------- Call detail, only what the period contains ----------------
+    if has_live:
+        section_header("Graded Call Detail", f"Individual live graded calls in {plabel}.")
+        det = call_period[["AssociateName", "ManagerTeam", "DateOfCall", "TotalScore",
+                           "Percentage", "CallFailed", "IssueResolvedFirstContact"]].copy()
+        det = det.sort_values("DateOfCall", ascending=False)
+        det["DateOfCall"] = det["DateOfCall"].dt.strftime("%m/%d/%Y")
+        det["Percentage"] = det["Percentage"].round(1)
+        det.columns = ["Associate", "Team", "Date of Call", "Total Score", "Percentage",
+                       "Call Failed", "Resolved on First Contact"]
+        st.dataframe(det, use_container_width=True, hide_index=True)
+        st.caption(f"{len(det):,} graded calls.")
+
+    if has_q1:
+        section_header("Q1 Call Scores",
+                       "Listed by month, since Q1 records carry no call dates.")
+        d = q1_period[["AssociateName", "ManagerTeam", "Q1Month", "Q1MonthNum", "Score"]].copy()
+        d = d.sort_values(["Q1MonthNum", "AssociateName"])
+        d = d[["AssociateName", "ManagerTeam", "Q1Month", "Score"]]
+        d.columns = ["Associate", "Team", "Month", "Score"]
+        st.dataframe(d, use_container_width=True, hide_index=True)
+        st.caption(f"{len(d):,} Q1 call scores.")
+
+    if not has_live and not has_q1:
+        st.info(f"No call records in {plabel} for this view.")
+
+st.markdown(
+    '<div class="foot-note">Quality scores are calculated as the average of each associate\'s own '
+    'average, so associates are weighted equally regardless of how many of their calls were graded.</div>',
+    unsafe_allow_html=True
 )
-
-if q1_filtered.empty:
-    st.info("No Q1 call scores available for the selected filters.")
-else:
-    q1_detail = q1_filtered[[
-        "AssociateName",
-        "ManagerTeam",
-        "Q1Month",
-        "Q1Quarter",
-        "Q1MonthNum",
-        "Score"
-    ]].copy()
-
-    q1_detail = q1_detail.sort_values(
-        ["Q1Quarter", "Q1MonthNum", "AssociateName"]
-    )
-
-    st.dataframe(
-        q1_detail[[
-            "AssociateName",
-            "ManagerTeam",
-            "Q1Month",
-            "Q1Quarter",
-            "Score"
-        ]].rename(columns={
-            "Q1Month": "Month",
-            "Q1Quarter": "Quarter"
-        }),
-        use_container_width=True,
-        hide_index=True
-    )
