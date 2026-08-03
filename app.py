@@ -10,6 +10,13 @@ BASE_DIR = Path(__file__).parent
 CALL_FILE = BASE_DIR / "MAS_Call_Grading_Raw_Data.xlsx"
 BENCH_FILE = BASE_DIR / "MAS_Benchmarks.xlsx"
 
+# Onboarding scores live in their own file and are deliberately kept out of every
+# other metric on this dashboard. Nothing here feeds the Summary or Detail tabs.
+# Rename the file below if yours is named differently. The first sheet is read
+# unless NEW_HIRE_SHEET is set to a specific sheet name.
+NEW_HIRE_FILE = BASE_DIR / "NEW_HIRE_MAS_Scores.xlsx"
+NEW_HIRE_SHEET = 0
+
 # =========================================
 # CONFIG
 # =========================================
@@ -325,8 +332,10 @@ def view_avg(df: pd.DataFrame, score_col: str) -> float:
 # LOAD DATA
 # =========================================
 @st.cache_data
-def load_call_data() -> pd.DataFrame:
-    df = clean_cols(pd.read_excel(CALL_FILE, sheet_name="Raw_Data")).dropna(how="all")
+def load_graded_calls(path, sheet) -> pd.DataFrame:
+    """Load a graded call file. The department file and the onboarding file
+    share this schema, so both go through here and are treated identically."""
+    df = clean_cols(pd.read_excel(path, sheet_name=sheet)).dropna(how="all")
 
     assoc = pick_col(df, ["AssociateName", "Associate Name"])
     team = pick_col(df, ["ManagerTeam", "Manager Team"])
@@ -346,12 +355,16 @@ def load_call_data() -> pd.DataFrame:
     })
     out["Percentage"] = normalize_percentage(df[pct]) if pct else out["TotalScore"]
     out = out.dropna(subset=["AssociateName", "ManagerTeam", "DateOfCall"], how="all")
+    out = out[out["AssociateName"].str.strip() != ""]
 
     out["MonthLabel"] = out["DateOfCall"].dt.strftime("%b %Y")
     out["MonthSort"] = out["DateOfCall"].dt.to_period("M").astype(str)
     out["QuarterLabel"] = out["DateOfCall"].dt.quarter.apply(lambda x: f"Q{int(x)}" if pd.notna(x) else pd.NA)
     out["QuarterSort"] = out["DateOfCall"].dt.to_period("Q").astype(str)
     return out
+
+def load_call_data() -> pd.DataFrame:
+    return load_graded_calls(CALL_FILE, "Raw_Data")
 
 @st.cache_data
 def load_q1_data() -> pd.DataFrame:
@@ -379,6 +392,11 @@ def load_q1_data() -> pd.DataFrame:
     out["Q1MonthLabel"] = out["Q1MonthNum"].map(lambda n: f"{MONTH_ABBR[n]} {Q1_YEAR}")
     return out
 
+def load_new_hire_data() -> pd.DataFrame:
+    """The onboarding file uses the same columns as the department file, so it
+    goes through the same loader and gets identical treatment."""
+    return load_graded_calls(NEW_HIRE_FILE, NEW_HIRE_SHEET)
+
 st.title("MAS Dashboard")
 st.caption("Managed Accounts Service call grading, year to date")
 
@@ -393,6 +411,20 @@ try:
 except Exception as e:
     st.error(f"Could not load Q1 data: {e}")
     q1_df = pd.DataFrame()
+
+# Loaded quietly. A missing onboarding file must never break the main dashboard,
+# so the error is surfaced inside the Onboarding tab instead of at the top.
+new_hire_df = pd.DataFrame()
+new_hire_error = None
+try:
+    new_hire_df = load_new_hire_data()
+except FileNotFoundError:
+    new_hire_error = (
+        f"No onboarding file found. Expected it at **{NEW_HIRE_FILE.name}** next to this app. "
+        "Add the file and redeploy, or update NEW_HIRE_FILE at the top of the script."
+    )
+except Exception as e:
+    new_hire_error = f"Could not load the onboarding file: {e}"
 
 note_box(
     "Q1 covers January through March scored call records. Those records are score-only and "
@@ -510,7 +542,7 @@ def build_ranking(q1_part: pd.DataFrame, live_part: pd.DataFrame) -> pd.DataFram
     return rk.sort_values(["Rank", "AssociateName"]).reset_index(drop=True)
 
 
-tab_summary, tab_detail = st.tabs(["Summary", "Detail"])
+tab_summary, tab_detail, tab_onboarding = st.tabs(["Summary", "Detail", "Onboarding"])
 
 # =========================================
 # SUMMARY TAB
@@ -583,9 +615,9 @@ with tab_summary:
             fig.update_xaxes(title="")
             st.plotly_chart(fig, use_container_width=True)
 
-        tbl = quarters[["Quarter", "Status", "Calls", "Quality", "Resolution", "Failed"]].copy()
+        tbl = quarters[["Quarter", "Calls", "Quality", "Resolution", "Failed"]].copy()
         tbl = pd.concat([tbl, pd.DataFrame([{
-            "Quarter": "Year to Date", "Status": "All quarters", "Calls": ytd_calls,
+            "Quarter": "Year to Date", "Calls": ytd_calls,
             "Quality": ytd_quality, "Resolution": ytd_resolution, "Failed": ytd_failed,
         }])], ignore_index=True)
 
@@ -593,7 +625,7 @@ with tab_summary:
         tbl["Quality"] = tbl["Quality"].map(fmt_score)
         tbl["Resolution"] = tbl["Resolution"].map(fmt_pct)
         tbl["Failed"] = tbl["Failed"].map(fmt_pct)
-        tbl.columns = ["Quarter", "Status", "Calls Graded", "Average Quality Score",
+        tbl.columns = ["Quarter", "Calls Graded", "Average Quality Score",
                        "First Call Resolution Rate", "Call Failed Rate"]
         st.dataframe(tbl, use_container_width=True, hide_index=True)
 
@@ -797,6 +829,174 @@ with tab_detail:
 
     if not has_live and not has_q1:
         st.info(f"No call records in {plabel} for this view.")
+
+# =========================================
+# ONBOARDING TAB
+# =========================================
+# Entirely self-contained. Reads only NEW_HIRE_FILE and touches nothing that
+# feeds the Summary or Detail tabs, so onboarding scores never move the
+# department numbers. The View By control above does not apply here either.
+with tab_onboarding:
+    st.markdown(
+        '<div class="slide-band"><h2>Onboarding Call Grading</h2>'
+        '<p>Managed Accounts Service &nbsp;|&nbsp; Associates in training &nbsp;|&nbsp; '
+        'Excluded from department performance</p>'
+        '</div><div class="slide-rule"></div>',
+        unsafe_allow_html=True
+    )
+
+    note_box(
+        "<strong>Associates in training.</strong> The individuals shown here are still completing "
+        "onboarding. Their scores are maintained in a separate record and are excluded from all "
+        "department, team, and quarterly figures reported on the Summary and Detail tabs, so "
+        "overall performance reflects fully ramped associates only. "
+        "These results are intended to track individual progress through training and should not "
+        "be read as department performance or compared directly against tenured associate results."
+    )
+
+    if new_hire_error:
+        st.warning(new_hire_error)
+    elif new_hire_df.empty:
+        st.info("The onboarding file loaded but contains no scored calls yet.")
+    else:
+        nh = new_hire_df
+        nh_names = sorted(nh["AssociateName"].unique().tolist())
+
+        # Per associate, then the average of those, so each weighs the same
+        # regardless of how many of their calls have been graded.
+        per_hire = (
+            nh.groupby(["AssociateName", "ManagerTeam"], as_index=False)
+              .agg(Calls=("TotalScore", "size"), Quality=("TotalScore", "mean"))
+        )
+        per_hire["Quality"] = per_hire["Quality"].round(1)
+        per_hire = per_hire.sort_values("Quality", ascending=False).reset_index(drop=True)
+
+        overall_quality = round(float(per_hire["Quality"].mean()), 1)
+        overall_calls = int(len(nh))
+
+        group_label("All Associates in Training")
+        n1, n2, n3, n4 = st.columns(4)
+        n1.metric("Associates in Training", f"{len(nh_names):,}")
+        n2.metric("Total Calls Graded", f"{overall_calls:,}")
+        n3.metric("Average Quality Score", fmt_score(overall_quality))
+        n4.metric("First Call Resolution Rate", fmt_pct(rate(nh, "IssueResolvedFirstContact")))
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        e1, e2, e3, e4 = st.columns(4)
+        e1.metric("Call Failed Rate", fmt_pct(rate(nh, "CallFailed")))
+        latest = nh["DateOfCall"].max()
+        e2.metric("Most Recent Graded Call", latest.strftime("%m/%d/%Y") if pd.notna(latest) else "N/A")
+        e3.metric("Highest Score", fmt_score(nh["TotalScore"].max()))
+        e4.metric("Lowest Score", fmt_score(nh["TotalScore"].min()))
+
+        st.caption(
+            "Averages are calculated using the same methodology as the rest of the dashboard, "
+            "so onboarding results remain directly comparable once an associate completes training."
+        )
+
+        group_label("By Associate")
+        hcols = st.columns(min(len(per_hire), 4))
+        for i, (_, r) in enumerate(per_hire.iterrows()):
+            if i < len(hcols):
+                hcols[i].metric(
+                    r["AssociateName"], fmt_score(r["Quality"]),
+                    f"{int(r['Calls']):,} calls graded", delta_color="off"
+                )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        left, right = st.columns(2)
+
+        with left:
+            st.markdown('<div class="chart-cap">Average Quality Score by Associate</div>',
+                        unsafe_allow_html=True)
+            fig = go.Figure(go.Bar(
+                x=per_hire["AssociateName"], y=per_hire["Quality"],
+                marker_color=LPL_NAVY,
+                text=[f"{v:.1f}" for v in per_hire["Quality"]],
+                textposition="outside", width=0.5,
+            ))
+            fig.add_hline(
+                y=overall_quality, line_dash="dash", line_color=LPL_ORANGE,
+                annotation_text=f"Onboarding average {overall_quality:.1f}",
+                annotation_position="top left",
+                annotation_font_color=LPL_ORANGE,
+            )
+            fig = apply_layout(fig, height=340, show_legend=False)
+            fig.update_yaxes(title="Average Quality Score", range=[0, 105])
+            fig.update_xaxes(title="")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with right:
+            st.markdown('<div class="chart-cap">Average Quality Score by Month</div>',
+                        unsafe_allow_html=True)
+            monthly_nh = (
+                nh.groupby(["MonthSort", "MonthLabel"], as_index=False)
+                  .agg(Calls=("TotalScore", "size"), Quality=("TotalScore", "mean"))
+                  .sort_values("MonthSort")
+            )
+            monthly_nh["Quality"] = monthly_nh["Quality"].round(1)
+            fig = go.Figure(go.Bar(
+                x=monthly_nh["MonthLabel"], y=monthly_nh["Quality"],
+                marker_color=LPL_NAVY,
+                text=[f"{q:.1f}<br>{int(c)} calls"
+                      for q, c in zip(monthly_nh["Quality"], monthly_nh["Calls"])],
+                textposition="outside", width=0.5,
+            ))
+            fig = apply_layout(fig, height=340, show_legend=False)
+            fig.update_yaxes(title="Average Quality Score", range=[0, 105])
+            fig.update_xaxes(title="", categoryorder="array",
+                             categoryarray=monthly_nh["MonthLabel"].tolist())
+            st.plotly_chart(fig, use_container_width=True)
+
+        section_header("Onboarding Summary",
+                       "One row per associate in training, with the combined onboarding average.")
+        summary_tbl = per_hire.copy()
+        summary_tbl["Resolution"] = summary_tbl["AssociateName"].map(
+            lambda n: rate(nh[nh["AssociateName"] == n], "IssueResolvedFirstContact"))
+        summary_tbl["Failed"] = summary_tbl["AssociateName"].map(
+            lambda n: rate(nh[nh["AssociateName"] == n], "CallFailed"))
+
+        summary_tbl = summary_tbl[["AssociateName", "ManagerTeam", "Calls",
+                                   "Quality", "Resolution", "Failed"]]
+        summary_tbl.columns = ["Associate", "Team", "Calls Graded",
+                               "Average Quality Score", "First Call Resolution Rate",
+                               "Call Failed Rate"]
+        summary_tbl["Calls Graded"] = summary_tbl["Calls Graded"].map(lambda v: f"{int(v):,}")
+        summary_tbl["Average Quality Score"] = summary_tbl["Average Quality Score"].map(fmt_score)
+        summary_tbl["First Call Resolution Rate"] = summary_tbl["First Call Resolution Rate"].map(fmt_pct)
+        summary_tbl["Call Failed Rate"] = summary_tbl["Call Failed Rate"].map(fmt_pct)
+
+        summary_tbl = pd.concat([summary_tbl, pd.DataFrame([{
+            "Associate": "All in Training", "Team": "",
+            "Calls Graded": f"{overall_calls:,}",
+            "Average Quality Score": fmt_score(overall_quality),
+            "First Call Resolution Rate": fmt_pct(rate(nh, "IssueResolvedFirstContact")),
+            "Call Failed Rate": fmt_pct(rate(nh, "CallFailed")),
+        }])], ignore_index=True)
+        st.dataframe(summary_tbl, use_container_width=True, hide_index=True)
+
+        section_header("Graded Call Detail",
+                       "Every graded call recorded during onboarding.")
+        det = nh[["AssociateName", "ManagerTeam", "DateOfCall", "TotalScore",
+                  "Percentage", "CallFailed", "IssueResolvedFirstContact"]].copy()
+        det = det.sort_values("DateOfCall", ascending=False)
+        det["DateOfCall"] = det["DateOfCall"].dt.strftime("%m/%d/%Y")
+        det["Percentage"] = det["Percentage"].round(1)
+        det.columns = ["Associate", "Team", "Date of Call", "Total Score", "Percentage",
+                       "Call Failed", "Resolved on First Contact"]
+        st.dataframe(det, use_container_width=True, hide_index=True)
+        st.caption(f"{len(det):,} graded calls across {len(nh_names)} associates in training.")
+
+        # Safeguard: the same person in both files would be counted twice
+        if not call_df.empty:
+            overlap = sorted(set(nh_names) & set(call_df["AssociateName"].unique()))
+            if overlap:
+                st.warning(
+                    "These associates appear in both the onboarding file and the main call grading file, "
+                    "so their calls are also counted in the department metrics: "
+                    + ", ".join(overlap)
+                    + ". Remove them from one file to keep onboarding fully separate."
+                )
 
 st.markdown(
     '<div class="foot-note">Quality scores are calculated as the average of each associate\'s own '
