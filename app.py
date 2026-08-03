@@ -915,12 +915,6 @@ with tab_onboarding:
                 text=[f"{v:.1f}" for v in per_hire["Quality"]],
                 textposition="outside", width=0.5,
             ))
-            fig.add_hline(
-                y=overall_quality, line_dash="dash", line_color=LPL_ORANGE,
-                annotation_text=f"Onboarding average {overall_quality:.1f}",
-                annotation_position="top left",
-                annotation_font_color=LPL_ORANGE,
-            )
             fig = apply_layout(fig, height=340, show_legend=False)
             fig.update_yaxes(title="Average Quality Score", range=[0, 105])
             fig.update_xaxes(title="")
