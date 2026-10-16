@@ -17,6 +17,9 @@ BENCH_FILE = BASE_DIR / "MAS_Benchmarks.xlsx"
 NEW_HIRE_FILE = BASE_DIR / "NEW_HIRE_MAS_Scores.xlsx"
 NEW_HIRE_SHEET = 0
 
+# Roster sheet inside CALL_FILE. EmploymentStatus = Active / Past.
+REF_SHEET = "Associate_Reference"
+
 # =========================================
 # CONFIG
 # =========================================
@@ -397,6 +400,25 @@ def load_new_hire_data() -> pd.DataFrame:
     goes through the same loader and gets identical treatment."""
     return load_graded_calls(NEW_HIRE_FILE, NEW_HIRE_SHEET)
 
+
+@st.cache_data
+def load_reference() -> pd.DataFrame:
+    """Roster from the Associate_Reference sheet (the same sheet the Power Automate
+    flow uses). Only AssociateName, ManagerTeam and EmploymentStatus are read here,
+    so the flow's columns are never changed by the dashboard."""
+    df = clean_cols(pd.read_excel(CALL_FILE, sheet_name=REF_SHEET)).dropna(how="all")
+    assoc = pick_col(df, ["AssociateName", "Associate Name"])
+    team = pick_col(df, ["ManagerTeam", "Manager Team"])
+    status = pick_col(df, ["EmploymentStatus", "Employment Status", "Status"], required=False)
+    out = pd.DataFrame({
+        "AssociateName": df[assoc].astype(str).str.strip(),
+        "RefTeam": df[team].astype(str).str.strip(),
+        "Status": df[status].astype(str).str.strip().str.title() if status else "Active",
+    })
+    out = out[(out["AssociateName"] != "") & (out["AssociateName"].str.lower() != "nan")]
+    out["Status"] = out["Status"].where(out["Status"].isin(["Active", "Past"]), "Past")
+    return out.drop_duplicates("AssociateName", keep="last").reset_index(drop=True)
+
 st.title("MAS Dashboard")
 st.caption("Managed Accounts Service call grading, year to date")
 
@@ -426,11 +448,60 @@ except FileNotFoundError:
 except Exception as e:
     new_hire_error = f"Could not load the onboarding file: {e}"
 
+# =========================================
+# ROSTER: Active vs Past
+# =========================================
+# Active associates are shown under their CURRENT team (from Associate_Reference),
+# including their older calls, so each manager sees their people's full history.
+# Past associates keep the team recorded on their calls. Nobody's calls are ever
+# dropped, so department history and averages stay intact.
+try:
+    ref_df = load_reference()
+except Exception as e:
+    st.error(f"Could not load {REF_SHEET}: {e}")
+    ref_df = pd.DataFrame(columns=["AssociateName", "RefTeam", "Status"])
+
+status_map = dict(zip(ref_df["AssociateName"], ref_df["Status"]))
+team_map = dict(zip(ref_df["AssociateName"], ref_df["RefTeam"]))
+
+def apply_roster(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    df = df.copy()
+    # Anyone with calls but missing from the reference sheet is treated as Past
+    df["Status"] = df["AssociateName"].map(status_map).fillna("Past")
+    active = df["Status"] == "Active"
+    df.loc[active, "ManagerTeam"] = df.loc[active, "AssociateName"].map(team_map)
+    return df
+
+call_df = apply_roster(call_df)
+q1_df = apply_roster(q1_df)
+new_hire_df = apply_roster(new_hire_df)
+
+active_names = sorted(ref_df.loc[ref_df["Status"] == "Active", "AssociateName"].tolist())
+active_teams = sorted(ref_df.loc[ref_df["Status"] == "Active", "RefTeam"].dropna().unique().tolist())
+
+# Quarter that today falls in. Any earlier quarter is Final.
+CURRENT_Q = pd.Timestamp.today().to_period("Q")
+
+def _status_line() -> str:
+    if call_df.empty:
+        return ""
+    latest = call_df["DateOfCall"].max()
+    finals = sorted({f"Q{p.quarter}" for p in call_df["DateOfCall"].dt.to_period("Q").dropna().unique()
+                     if p < CURRENT_Q})
+    line = ""
+    if finals:
+        line += f"{', '.join(finals)} {'is' if len(finals) == 1 else 'are'} final. "
+    line += f"Q{CURRENT_Q.quarter} is in progress. "
+    if pd.notna(latest):
+        line += f"Most recent graded call: {latest.strftime('%m/%d/%Y')}."
+    return line
+
 note_box(
     "Q1 covers January through March scored call records. Those records are score-only and "
     "carry no call dates, so First Call Resolution Rate and Call Failed Rate begin at "
-    "April 1, 2026 and are never reported for Q1. "
-    "Q2 (April through June) is final. Q3 is in progress and currently holds July scores."
+    "April 1, 2026 and are never reported for Q1. " + _status_line()
 )
 
 # =========================================
@@ -439,7 +510,9 @@ note_box(
 w1, w2 = st.columns([1, 1])
 
 with w1:
-    view_by = st.selectbox("View By", ["All Teams", "Katie", "Charles", "Individual Associate"], index=0)
+    # Teams come from the Active rows of Associate_Reference, so a manager change
+    # is an Excel edit only. No Python change needed.
+    view_by = st.selectbox("View By", ["All Teams"] + active_teams + ["Individual Associate"], index=0)
 
 all_associates = sorted(
     pd.concat([
@@ -447,17 +520,25 @@ all_associates = sorted(
         q1_df["AssociateName"] if not q1_df.empty else pd.Series(dtype=str)
     ]).dropna().astype(str).str.strip().unique().tolist()
 )
+past_associates = [n for n in all_associates if status_map.get(n, "Past") == "Past"]
+active_with_calls = [n for n in all_associates if status_map.get(n) == "Active"]
 
 selected_associate = None
 with w2:
     if view_by == "Individual Associate":
-        selected_associate = st.selectbox("Associate", all_associates)
+        population = st.radio("Show", ["Active", "Past", "All"], horizontal=True)
+        pool = {"Active": active_with_calls, "Past": past_associates, "All": all_associates}[population]
+        if pool:
+            selected_associate = st.selectbox("Associate", pool)
+        else:
+            st.info(f"No {population.lower()} associates with graded calls.")
 
 def by_team(df):
     if df.empty:
         return df
-    if view_by in ["Katie", "Charles"]:
-        return df[df["ManagerTeam"] == view_by]
+    if view_by in active_teams:
+        # Current team view = that manager's active associates only
+        return df[(df["ManagerTeam"] == view_by) & (df["Status"] == "Active")]
     if view_by == "Individual Associate" and selected_associate:
         return df[df["AssociateName"] == selected_associate]
     return df
@@ -487,7 +568,7 @@ def build_quarters() -> pd.DataFrame:
             g = call_scope[call_scope["QuarterSort"] == qsort]
             rows.append({
                 "Quarter": g["QuarterLabel"].iloc[0], "Sort": qsort,
-                "Status": "In Progress" if qsort == newest else "Final",
+                "Status": "In Progress" if qsort == str(CURRENT_Q) else "Final",
                 "Calls": int(len(g)),
                 "Quality": view_avg(g, "TotalScore"),
                 "Resolution": rate(g, "IssueResolvedFirstContact"),
@@ -531,6 +612,8 @@ def build_ranking(q1_part: pd.DataFrame, live_part: pd.DataFrame) -> pd.DataFram
     b = live_part.groupby(["ManagerTeam", "AssociateName"], as_index=False).agg(S2=("TotalScore", "sum"), N2=("TotalScore", "size")) \
         if not live_part.empty else pd.DataFrame(columns=["ManagerTeam", "AssociateName", "S2", "N2"])
     rk = a.merge(b, on=["ManagerTeam", "AssociateName"], how="outer").fillna(0)
+    if not rk.empty:
+        rk["Status"] = rk["AssociateName"].map(status_map).fillna("Past")
     if rk.empty:
         return rk
     rk["Calls"] = (rk["N"] + rk["N2"]).astype(int)
@@ -542,7 +625,8 @@ def build_ranking(q1_part: pd.DataFrame, live_part: pd.DataFrame) -> pd.DataFram
     return rk.sort_values(["Rank", "AssociateName"]).reset_index(drop=True)
 
 
-tab_summary, tab_detail, tab_onboarding = st.tabs(["Summary", "Detail", "Onboarding"])
+tab_summary, tab_detail, tab_active, tab_past, tab_onboarding = st.tabs(
+    ["Summary", "Detail", "Active Associates", "Past Associates", "Onboarding"])
 
 # =========================================
 # SUMMARY TAB
@@ -781,8 +865,8 @@ with tab_detail:
     else:
         total_ranked = len(ranking_all)
 
-        if view_by in ["Katie", "Charles"]:
-            shown = ranking_all[ranking_all["ManagerTeam"] == view_by]
+        if view_by in active_teams:
+            shown = ranking_all[(ranking_all["ManagerTeam"] == view_by) & (ranking_all["Status"] == "Active")]
         elif individual_view and selected_associate:
             shown = ranking_all[ranking_all["AssociateName"] == selected_associate]
         else:
@@ -791,7 +875,7 @@ with tab_detail:
         if shown.empty:
             st.info(f"No graded calls in {plabel} for this view.")
         else:
-            cols = ["ManagerTeam", "AssociateName", "Calls", "Quality", "Rank"] if view_by == "All Teams" \
+            cols = ["ManagerTeam", "AssociateName", "Status", "Calls", "Quality", "Rank"] if view_by == "All Teams" \
                 else ["AssociateName", "Calls", "Quality", "Rank"]
             st.dataframe(
                 shown[cols].rename(columns={
@@ -801,7 +885,7 @@ with tab_detail:
             )
             if individual_view and selected_associate:
                 st.caption(f"Rank {int(shown['Rank'].iloc[0])} of {total_ranked} associates graded in {plabel}.")
-            elif view_by in ["Katie", "Charles"]:
+            elif view_by in active_teams:
                 st.caption(f"Ranked against all {total_ranked} associates graded in {plabel}.")
 
     # ---------------- Call detail, only what the period contains ----------------
@@ -815,7 +899,7 @@ with tab_detail:
         det.columns = ["Associate", "Team", "Date of Call", "Total Score", "Percentage",
                        "Call Failed", "Resolved on First Contact"]
         st.dataframe(det, use_container_width=True, hide_index=True)
-        st.caption(f"{len(det):,} graded calls.")
+        st.caption(f"{len(det):,} graded calls. Active associates are shown under their current team.")
 
     if has_q1:
         section_header("Q1 Call Scores",
@@ -829,6 +913,104 @@ with tab_detail:
 
     if not has_live and not has_q1:
         st.info(f"No call records in {plabel} for this view.")
+
+# =========================================
+# ACTIVE / PAST ASSOCIATE TABS
+# =========================================
+# Year to date per associate (Q1 + live). These tabs ignore View By and have
+# their own filters. Click any column header to sort.
+def associate_table(names: list) -> pd.DataFrame:
+    rows = []
+    for n in names:
+        q = q1_df[q1_df["AssociateName"] == n] if not q1_df.empty else q1_df
+        lv = call_df[call_df["AssociateName"] == n] if not call_df.empty else call_df
+        calls = len(q) + len(lv)
+        total = (q["Score"].sum() if not q.empty else 0) + (lv["TotalScore"].sum() if not lv.empty else 0)
+        if not lv.empty:
+            team = lv.sort_values("DateOfCall")["ManagerTeam"].iloc[-1]
+        elif not q.empty:
+            team = q["ManagerTeam"].iloc[-1]
+        else:
+            team = team_map.get(n, "")
+        rows.append({
+            "Associate": n,
+            "Team": team_map.get(n, team) if status_map.get(n) == "Active" else team,
+            "Calls Graded": calls,
+            "Average Quality Score": round(total / calls, 1) if calls else None,
+            "First Call Resolution Rate": rate(lv, "IssueResolvedFirstContact") if not lv.empty else None,
+            "Call Failed Rate": rate(lv, "CallFailed") if not lv.empty else None,
+            "First Graded Call": lv["DateOfCall"].min() if not lv.empty else pd.NaT,
+            "Most Recent Graded Call": lv["DateOfCall"].max() if not lv.empty else pd.NaT,
+        })
+    return pd.DataFrame(rows)
+
+with tab_active:
+    st.markdown(
+        '<div class="slide-band"><h2>Active Associates</h2>'
+        '<p>Managed Accounts Service &nbsp;|&nbsp; Current roster &nbsp;|&nbsp; Year to date</p>'
+        '</div><div class="slide-rule"></div>',
+        unsafe_allow_html=True
+    )
+    if not active_names:
+        st.info(f"No associates are marked Active in {REF_SHEET}.")
+    else:
+        at = associate_table(active_names)
+        f1, f2 = st.columns(2)
+        with f1:
+            team_pick = st.selectbox("Team", ["All Teams"] + active_teams, key="active_team")
+        with f2:
+            sort_pick = st.selectbox("Sort By", ["Average Quality Score", "Calls Graded",
+                                                 "Associate", "Team", "Most Recent Graded Call"],
+                                     key="active_sort")
+        if team_pick != "All Teams":
+            at = at[at["Team"] == team_pick]
+        at["Rank"] = at["Average Quality Score"].rank(method="dense", ascending=False).astype("Int64")
+        asc = sort_pick in ["Associate", "Team"]
+        at = at.sort_values(sort_pick, ascending=asc, na_position="last")
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Active Associates", f"{len(at):,}")
+        k2.metric("Calls Graded", f"{int(at['Calls Graded'].sum()):,}")
+        k3.metric("Average Quality Score", fmt_score(at["Average Quality Score"].dropna().mean()
+                                                     if at["Average Quality Score"].notna().any() else None))
+        k4.metric("No Graded Calls Yet", f"{int((at['Calls Graded'] == 0).sum()):,}")
+
+        show = at[["Rank", "Associate", "Team", "Calls Graded", "Average Quality Score",
+                   "First Call Resolution Rate", "Call Failed Rate", "Most Recent Graded Call"]].copy()
+        show["Average Quality Score"] = show["Average Quality Score"].map(fmt_score)
+        show["First Call Resolution Rate"] = show["First Call Resolution Rate"].map(fmt_pct)
+        show["Call Failed Rate"] = show["Call Failed Rate"].map(fmt_pct)
+        show["Most Recent Graded Call"] = show["Most Recent Graded Call"].dt.strftime("%m/%d/%Y").fillna("No calls yet")
+        st.dataframe(show, use_container_width=True, hide_index=True)
+        st.caption("Rank is among active associates in the selected team. "
+                   "Active associates are shown under their current team, including calls graded before a team change.")
+
+with tab_past:
+    st.markdown(
+        '<div class="slide-band"><h2>Past Associates</h2>'
+        '<p>Managed Accounts Service &nbsp;|&nbsp; No longer with MAS &nbsp;|&nbsp; Historical results</p>'
+        '</div><div class="slide-rule"></div>',
+        unsafe_allow_html=True
+    )
+    note_box("These associates are no longer with MAS. Their graded calls remain in every department, "
+             "quarterly, and year to date figure on the Summary and Detail tabs so historical results "
+             "are not changed by departures.")
+    if not past_associates:
+        st.info("No past associates with graded calls.")
+    else:
+        pt = associate_table(past_associates).sort_values("Most Recent Graded Call", ascending=False,
+                                                          na_position="last")
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Past Associates", f"{len(pt):,}")
+        p2.metric("Calls Graded", f"{int(pt['Calls Graded'].sum()):,}")
+        p3.metric("Average Quality Score", fmt_score(pt["Average Quality Score"].dropna().mean()))
+        pt = pt.rename(columns={"Team": "Last Team"})
+        pt["Average Quality Score"] = pt["Average Quality Score"].map(fmt_score)
+        pt["First Call Resolution Rate"] = pt["First Call Resolution Rate"].map(fmt_pct)
+        pt["Call Failed Rate"] = pt["Call Failed Rate"].map(fmt_pct)
+        for c in ["First Graded Call", "Most Recent Graded Call"]:
+            pt[c] = pt[c].dt.strftime("%m/%d/%Y").fillna("Q1 only")
+        st.dataframe(pt, use_container_width=True, hide_index=True)
 
 # =========================================
 # ONBOARDING TAB
@@ -983,13 +1165,15 @@ with tab_onboarding:
 
         # Safeguard: the same person in both files would be counted twice
         if not call_df.empty:
-            overlap = sorted(set(nh_names) & set(call_df["AssociateName"].unique()))
-            if overlap:
+            keys = ["AssociateName", "DateOfCall", "TotalScore"]
+            dupes = nh[keys].merge(call_df[keys], on=keys, how="inner")
+            if not dupes.empty:
                 st.warning(
-                    "These associates appear in both the onboarding file and the main call grading file, "
-                    "so their calls are also counted in the department metrics: "
-                    + ", ".join(overlap)
-                    + ". Remove them from one file to keep onboarding fully separate."
+                    "These onboarding calls also appear in the main call grading file, "
+                    "so they are being counted in the department metrics too: "
+                    + ", ".join(f"{r.AssociateName} ({r.DateOfCall:%m/%d/%Y})"
+                                for r in dupes.drop_duplicates().itertuples())
+                    + ". Remove the duplicate row from one file."
                 )
 
 st.markdown(
